@@ -5,7 +5,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$REPO_ROOT/deploy"
 TEMPLATE_PATH="$DEPLOY_DIR/com.autoipobot.plist.example"
 TARGET_PLIST_PATH="$DEPLOY_DIR/com.autoipobot.plist"
-TARGET_LAUNCHAGENT="/Library/LaunchAgents/com.autoipobot.plist"
+TARGET_LAUNCHAGENT="$HOME/Library/LaunchAgents/com.autoipobot.plist"
 DAEMON_BIN="$REPO_ROOT/daemon/autoipobot"
 
 if [[ -z "${TG_TOKEN:-}" ]]; then
@@ -81,6 +81,8 @@ if launchctl print gui/"$(id -u)" com.autoipobot >/dev/null 2>&1; then
   echo "Stopping previous autoipobot LaunchAgent..."
   launchctl bootout gui/"$(id -u)" com.autoipobot || true
 fi
+
+mkdir -p "$(dirname "$TARGET_LAUNCHAGENT")"
 
 if [[ -f "$TARGET_LAUNCHAGENT" ]]; then
   rm -f "$TARGET_LAUNCHAGENT"
