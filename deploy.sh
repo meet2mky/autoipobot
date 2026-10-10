@@ -3,10 +3,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEPLOY_DIR="$REPO_ROOT/deploy"
+LOG_DIR="$REPO_ROOT/logs"
 TEMPLATE_PATH="$DEPLOY_DIR/com.autoipobot.plist.example"
 TARGET_PLIST_PATH="$DEPLOY_DIR/com.autoipobot.plist"
 TARGET_LAUNCHAGENT="$HOME/Library/LaunchAgents/com.autoipobot.plist"
 DAEMON_BIN="$REPO_ROOT/daemon/autoipobot"
+LOG_PATH="$LOG_DIR/autoipobot.log"
 
 if [[ -z "${TG_TOKEN:-}" ]]; then
   printf 'Enter Telegram bot token: '
@@ -36,7 +38,7 @@ if [[ ! -f "$DAEMON_BIN" ]]; then
   (cd "$REPO_ROOT/daemon" && export PATH="/opt/homebrew/bin:$PATH" && go build -o autoipobot .)
 fi
 
-mkdir -p "$DEPLOY_DIR"
+mkdir -p "$DEPLOY_DIR" "$LOG_DIR"
 
 cat > "$TARGET_PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -65,9 +67,9 @@ cat > "$TARGET_PLIST_PATH" <<EOF
         <string>${HOST_LABEL}</string>
     </dict>
     <key>StandardErrorPath</key>
-    <string>/tmp/autoipobot.log</string>
+    <string>$LOG_PATH</string>
     <key>StandardOutPath</key>
-    <string>/tmp/autoipobot.log</string>
+    <string>$LOG_PATH</string>
 </dict>
 </plist>
 EOF
