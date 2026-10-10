@@ -71,31 +71,30 @@ func main() {
 	}
 	logLine(fmt.Sprintf("loaded offset=%d from %s", offset, offsetPath))
 
-	if err := sendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s BOOT", cfg.Label)); err != nil {
-		logLine("failed to send boot notification: " + err.Error())
-	}
+	asyncSendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s BOOT", cfg.Label))
 
 	lastPoll := time.Now()
 	resumeSent := false
 	for {
 		if time.Since(lastPoll) > resumeGap && !resumeSent {
-			if err := sendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s RESUMED after %s", cfg.Label, formatDuration(time.Since(lastPoll)))); err != nil {
-				logLine("failed to send resume notification: " + err.Error())
-			}
+			asyncSendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s RESUMED after %s", cfg.Label, formatDuration(time.Since(lastPoll))))
 			resumeSent = true
 		}
 
+		logLine(fmt.Sprintf("polling telegram with offset=%d", offset))
 		updates, err := getUpdates(cfg.Token, offset)
 		if err != nil {
 			logLine("getUpdates failed: " + err.Error())
 			time.Sleep(5 * time.Second)
 			continue
 		}
+		logLine(fmt.Sprintf("getUpdates returned %d update(s) at offset=%d", len(updates), offset))
 
 		lastPoll = time.Now()
 		resumeSent = false
 		for _, item := range updates {
-			if item.UpdateID <= offset {
+			logLine(fmt.Sprintf("received update_id=%d current_offset=%d", item.UpdateID, offset))
+			if item.UpdateID < offset {
 				continue
 			}
 
@@ -208,20 +207,32 @@ func handleMessage(cfg *config, msg *message) error {
 		age := time.Since(time.Unix(msg.Date, 0))
 		if age > staleTimeout && command != "ping" && command != "status" {
 			logLine(fmt.Sprintf("STALE ignored: command=%q age=%s chat=%d", command, formatDuration(age), msg.Chat.ID))
-			return sendText(cfg.Token, msg.Chat.ID, fmt.Sprintf("STALE ignored (age %s)", formatDuration(age)))
+			asyncSendText(cfg.Token, msg.Chat.ID, fmt.Sprintf("STALE ignored (age %s)", formatDuration(age)))
+			return nil
 		}
 	}
 
 	switch command {
 	case "ping":
-		return sendText(cfg.Token, msg.Chat.ID, "ACK /ping")
+		asyncSendText(cfg.Token, msg.Chat.ID, "ACK /ping")
+		return nil
 	case "status":
-		return sendText(cfg.Token, msg.Chat.ID, "ACK /status")
+		asyncSendText(cfg.Token, msg.Chat.ID, "ACK /status")
+		return nil
 	case "help":
-		return sendText(cfg.Token, msg.Chat.ID, "Commands: /ping, /status, /help")
+		asyncSendText(cfg.Token, msg.Chat.ID, "Commands: /ping, /status, /help")
+		return nil
 	default:
 		return nil
 	}
+}
+
+func asyncSendText(token string, chatID int64, text string) {
+	go func() {
+		if err := sendText(token, chatID, text); err != nil {
+			logLine(fmt.Sprintf("failed to send message to chat=%d: %s", chatID, err))
+		}
+	}()
 }
 
 func sendText(token string, chatID int64, text string) error {
