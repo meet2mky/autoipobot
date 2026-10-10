@@ -86,7 +86,9 @@ if [[ -f "$TARGET_LAUNCHAGENT" ]] || launchctl print gui/"$(id -u)" com.autoipob
   launchctl remove gui/"$(id -u)"/com.autoipobot >/dev/null 2>&1 || true
 fi
 
-pkill -f "$DAEMON_BIN" >/dev/null 2>&1 || true
+while read -r pid; do
+  kill "$pid" 2>/dev/null || true
+done < <(ps -eo pid,args --no-headers | awk '$2 ~ /autoipobot/ {print $1}')
 
 if [[ -f "$TARGET_LAUNCHAGENT" ]]; then
   rm -f "$TARGET_LAUNCHAGENT"
