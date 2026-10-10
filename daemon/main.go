@@ -178,13 +178,16 @@ func parseCommand(raw string) string {
 	if text == "" {
 		return ""
 	}
-	text = strings.ToLower(text)
+
+	parts := strings.Fields(text)
+	if len(parts) == 0 {
+		return ""
+	}
+	text = strings.ToLower(parts[0])
 	if at := strings.IndexByte(text, '@'); at >= 0 {
 		text = text[:at]
 	}
-	if strings.HasPrefix(text, "/") {
-		text = strings.TrimPrefix(text, "/")
-	}
+	text = strings.TrimPrefix(text, "/")
 	return strings.TrimSpace(text)
 }
 

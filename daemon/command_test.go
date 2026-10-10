@@ -10,8 +10,10 @@ func TestParseCommand(t *testing.T) {
 	}{
 		{name: "strip mention and trim", raw: " /PING@autoipobot ", expected: "ping"},
 		{name: "lowercase command", raw: "Status", expected: "status"},
+		{name: "status command", raw: "/status@autoipobot", expected: "status"},
 		{name: "empty text", raw: "   ", expected: ""},
 		{name: "empty after mention", raw: "@autoipobot", expected: ""},
+		{name: "status without slash", raw: "STATUS", expected: "status"},
 	}
 
 	for _, tc := range tests {
