@@ -208,6 +208,8 @@ func handleMessage(cfg *config, msg *message) error {
 		return sendText(cfg.Token, msg.Chat.ID, "ACK /ping")
 	case "status":
 		return sendText(cfg.Token, msg.Chat.ID, "ACK /status")
+	case "help":
+		return sendText(cfg.Token, msg.Chat.ID, "Commands: /ping, /status, /help")
 	default:
 		return nil
 	}
