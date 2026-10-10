@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	pollTimeout   = 10 * time.Second
+	pollTimeout   = 1 * time.Second
 	staleTimeout  = 5 * time.Minute
 	resumeGap     = 3 * time.Minute
 	offsetFileTag = "autoipobot.offset"
@@ -111,7 +111,7 @@ func main() {
 			}
 		}
 		if len(updates) == 0 {
-			time.Sleep(500 * time.Millisecond)
+			continue
 		}
 	}
 }
