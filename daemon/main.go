@@ -58,19 +58,21 @@ type tgSendMessageRequest struct {
 func main() {
 	cfg, err := loadConfig()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		logLine("loadConfig failed: " + err.Error())
 		os.Exit(1)
 	}
+	logLine(fmt.Sprintf("starting autoipobot for host=%s chat=%d", cfg.Label, cfg.Chat))
 
 	offsetPath := filepath.Join(os.TempDir(), offsetFileTag)
 	offset, err := loadOffset(offsetPath)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		fmt.Fprintln(os.Stderr, "failed to read offset:", err)
+		logLine("failed to read offset: " + err.Error())
 		os.Exit(1)
 	}
+	logLine(fmt.Sprintf("loaded offset=%d from %s", offset, offsetPath))
 
 	if err := sendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s BOOT", cfg.Label)); err != nil {
-		fmt.Fprintln(os.Stderr, "failed to send boot notification:", err)
+		logLine("failed to send boot notification: " + err.Error())
 	}
 
 	lastPoll := time.Now()
@@ -78,13 +80,14 @@ func main() {
 	for {
 		if time.Since(lastPoll) > resumeGap && !resumeSent {
 			if err := sendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s RESUMED after %s", cfg.Label, formatDuration(time.Since(lastPoll)))); err != nil {
-				fmt.Fprintln(os.Stderr, "failed to send resume notification:", err)
+				logLine("failed to send resume notification: " + err.Error())
 			}
 			resumeSent = true
 		}
 
 		updates, err := getUpdates(cfg.Token, offset)
 		if err != nil {
+			logLine("getUpdates failed: " + err.Error())
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -98,7 +101,7 @@ func main() {
 
 			nextOffset := item.UpdateID + 1
 			if err := persistOffset(offsetPath, nextOffset); err != nil {
-				fmt.Fprintln(os.Stderr, "failed to persist offset:", err)
+				logLine("failed to persist offset: " + err.Error())
 				continue
 			}
 			offset = nextOffset
@@ -107,7 +110,7 @@ func main() {
 				continue
 			}
 			if err := handleMessage(cfg, item.Message); err != nil {
-				fmt.Fprintln(os.Stderr, "failed to handle message:", err)
+				logLine("failed to handle message: " + err.Error())
 			}
 		}
 		if len(updates) == 0 {
@@ -191,14 +194,20 @@ func parseCommand(raw string) string {
 	return strings.TrimSpace(text)
 }
 
+func logLine(msg string) {
+	fmt.Fprintf(os.Stderr, "%s %s\n", time.Now().Format(time.RFC3339), msg)
+}
+
 func handleMessage(cfg *config, msg *message) error {
 	command := parseCommand(msg.Text)
 	if command == "" {
 		return nil
 	}
+	logLine(fmt.Sprintf("handling command=%q chat=%d message_id=%d", command, msg.Chat.ID, msg.MessageID))
 	if msg.Date > 0 {
 		age := time.Since(time.Unix(msg.Date, 0))
 		if age > staleTimeout && command != "ping" && command != "status" {
+			logLine(fmt.Sprintf("STALE ignored: command=%q age=%s chat=%d", command, formatDuration(age), msg.Chat.ID))
 			return sendText(cfg.Token, msg.Chat.ID, fmt.Sprintf("STALE ignored (age %s)", formatDuration(age)))
 		}
 	}

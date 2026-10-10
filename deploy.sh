@@ -33,10 +33,8 @@ if [[ -z "${TG_TOKEN}" || -z "${TG_CHAT_ID}" || -z "${HOST_LABEL}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$DAEMON_BIN" ]]; then
-  echo "Building daemon binary..."
-  (cd "$REPO_ROOT/daemon" && export PATH="/opt/homebrew/bin:$PATH" && go build -o autoipobot .)
-fi
+echo "Building daemon binary..."
+(cd "$REPO_ROOT/daemon" && export PATH="/opt/homebrew/bin:$PATH" && go build -o autoipobot .)
 
 mkdir -p "$DEPLOY_DIR" "$LOG_DIR"
 
