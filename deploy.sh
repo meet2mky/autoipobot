@@ -79,16 +79,22 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
   exit 0
 fi
 
-if launchctl print gui/"$(id -u)" com.autoipobot >/dev/null 2>&1; then
+mkdir -p "$(dirname "$TARGET_LAUNCHAGENT")"
+
+if [[ -f "$TARGET_LAUNCHAGENT" ]] || launchctl print gui/"$(id -u)" com.autoipobot >/dev/null 2>&1; then
   echo "Stopping previous autoipobot LaunchAgent..."
-  launchctl bootout gui/"$(id -u)" com.autoipobot || true
+  launchctl bootout gui/"$(id -u)" "$TARGET_LAUNCHAGENT" 2>/dev/null || true
+  launchctl unload -w "$TARGET_LAUNCHAGENT" 2>/dev/null || true
+  launchctl remove gui/"$(id -u)"/com.autoipobot >/dev/null 2>&1 || true
 fi
 
-mkdir -p "$(dirname "$TARGET_LAUNCHAGENT")"
+pkill -f "$DAEMON_BIN" >/dev/null 2>&1 || true
 
 if [[ -f "$TARGET_LAUNCHAGENT" ]]; then
   rm -f "$TARGET_LAUNCHAGENT"
 fi
+
+rm -f "$LOG_PATH"
 
 cp "$TARGET_PLIST_PATH" "$TARGET_LAUNCHAGENT"
 launchctl bootstrap gui/"$(id -u)" "$TARGET_LAUNCHAGENT"
