@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.autoipobot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/your-user/autoipobot/daemon/autoipobot</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/your-user/autoipobot/daemon</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>TG_TOKEN</key>
+        <string>&lt;TOKEN&gt;</string>
+        <key>TG_CHAT_ID</key>
+        <string>&lt;CHAT_ID&gt;</string>
+        <key>HOST_LABEL</key>
+        <string>&lt;HOST_LABEL&gt;</string>
+    </dict>
+    <key>StandardErrorPath</key>
+    <string>/tmp/autoipobot.log</string>
+    <key>StandardOutPath</key>
+    <string>/tmp/autoipobot.log</string>
+</dict>
+</plist>

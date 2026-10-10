@@ -1,0 +1,4 @@
+daemon/autoipobot
+*.log
+.env
+deploy/com.autoipobot.plist
