@@ -88,7 +88,7 @@ fi
 
 while read -r pid; do
   kill "$pid" 2>/dev/null || true
-done < <(ps -eo pid,args --no-headers | awk '$2 ~ /autoipobot/ {print $1}')
+done < <(ps -axo pid,command | awk '$2 ~ /autoipobot/ {print $1}')
 
 if [[ -f "$TARGET_LAUNCHAGENT" ]]; then
   rm -f "$TARGET_LAUNCHAGENT"
