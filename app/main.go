@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,9 +13,11 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -37,8 +40,53 @@ type appState struct {
 	stopBtn        *widget.Button
 	restartBtn     *widget.Button
 	refreshLogsBtn *widget.Button
+	olderLogsBtn   *widget.Button
+	newerLogsBtn   *widget.Button
 	autoStartBtn   *widget.Button
 	window         fyne.Window
+	logViewStart   int
+	logPageSize    int
+}
+
+type modernAppTheme struct{}
+
+func (m *modernAppTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	switch name {
+	case theme.ColorNameBackground:
+		return color.NRGBA{R: 10, G: 14, B: 24, A: 255}
+	case theme.ColorNameButton:
+		return color.NRGBA{R: 24, G: 35, B: 52, A: 255}
+	case theme.ColorNameDisabled:
+		return color.NRGBA{R: 92, G: 102, B: 118, A: 255}
+	case theme.ColorNameForeground:
+		return color.NRGBA{R: 228, G: 234, B: 244, A: 255}
+	case theme.ColorNamePrimary:
+		return color.NRGBA{R: 99, G: 102, B: 241, A: 255}
+	case theme.ColorNameHover:
+		return color.NRGBA{R: 31, G: 41, B: 55, A: 255}
+	case theme.ColorNameSelection:
+		return color.NRGBA{R: 34, G: 197, B: 94, A: 255}
+	case theme.ColorNameOverlayBackground:
+		return color.NRGBA{R: 15, G: 23, B: 42, A: 220}
+	case theme.ColorNameError:
+		return color.NRGBA{R: 239, G: 68, B: 68, A: 255}
+	case theme.ColorNameFocus:
+		return color.NRGBA{R: 45, G: 212, B: 191, A: 255}
+	default:
+		return theme.DefaultTheme().Color(name, variant)
+	}
+}
+
+func (m *modernAppTheme) Font(style fyne.TextStyle) fyne.Resource {
+	return theme.DefaultTheme().Font(style)
+}
+
+func (m *modernAppTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
+	return theme.DefaultTheme().Icon(name)
+}
+
+func (m *modernAppTheme) Size(name fyne.ThemeSizeName) float32 {
+	return theme.DefaultTheme().Size(name)
 }
 
 var appLockFile *os.File
@@ -332,9 +380,59 @@ func (s *appState) syncButtonState() {
 	}
 }
 
+func logTailWindow(rawText string, pageSize int, start int) (string, int, bool, bool) {
+	if pageSize <= 0 {
+		pageSize = 100
+	}
+	text := strings.TrimRight(rawText, "\n")
+	if text == "" {
+		return "", 0, false, false
+	}
+	lines := strings.Split(text, "\n")
+	total := len(lines)
+	if total <= pageSize {
+		return strings.Join(lines, "\n"), 0, false, false
+	}
+	if start <= 0 {
+		start = total - pageSize
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > total-pageSize {
+		start = total - pageSize
+	}
+	end := min(start+pageSize, total)
+	window := strings.Join(lines[start:end], "\n")
+	canOlder := start > 0
+	canNewer := end < total
+	return window, start, canOlder, canNewer
+}
+
+func renderLogWindow(state *appState) {
+	text := readLogFile()
+	window, start, canOlder, canNewer := logTailWindow(text, state.logPageSize, state.logViewStart)
+	state.logViewStart = start
+	state.logs.SetText(window)
+	if state.olderLogsBtn != nil {
+		if canOlder {
+			state.olderLogsBtn.Enable()
+		} else {
+			state.olderLogsBtn.Disable()
+		}
+	}
+	if state.newerLogsBtn != nil {
+		if canNewer {
+			state.newerLogsBtn.Enable()
+		} else {
+			state.newerLogsBtn.Disable()
+		}
+	}
+}
+
 func refreshLogView(state *appState) {
 	fyne.Do(func() {
-		state.logs.SetText(readLogFile())
+		renderLogWindow(state)
 	})
 }
 
@@ -352,19 +450,21 @@ func refreshUiState(state *appState) {
 		} else {
 			state.setStatus("Stopped")
 		}
-		state.logs.SetText(readLogFile())
+		renderLogWindow(state)
 		state.syncButtonState()
 	})
 }
 
 func newAppState() *appState {
 	state := &appState{
-		repoRoot: repoRoot(),
-		settings: loadSettings(),
-		status:   widget.NewLabel("Status: Ready"),
-		logs:     widget.NewMultiLineEntry(),
+		repoRoot:    repoRoot(),
+		settings:    loadSettings(),
+		status:      widget.NewLabel("Status: Ready"),
+		logs:        widget.NewMultiLineEntry(),
+		logPageSize: 100,
+		logViewStart: 0,
 	}
-	state.logs.SetText(readLogFile())
+	state.logs.SetText("")
 	state.logs.Disable()
 	return state
 }
@@ -423,15 +523,52 @@ func (s *appState) toggleAutoStart() {
 	}
 }
 
-func newStatusPanel(state *appState) fyne.CanvasObject {
-	summary := widget.NewCard("Daemon overview", "",
-		container.New(layout.NewVBoxLayout(),
-			widget.NewLabel("Host: "+state.settings.HostLabel),
-			widget.NewLabel("Daemon: autoipo"),
-			widget.NewLabel("Mode: Telegram polling"),
-		),
-	)
+func badgeLabel(text string, accent color.Color, textColor color.Color) *fyne.Container {
+	label := canvas.NewText(text, textColor)
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	dot := canvas.NewRectangle(accent)
+	dot.SetMinSize(fyne.NewSize(10, 10))
+	row := container.NewHBox(dot, label)
+	row.Objects[0].(*canvas.Rectangle).Refresh()
+	return container.NewPadded(row)
+}
 
+func brandHeader(title string) fyne.CanvasObject {
+	bg := canvas.NewRectangle(color.NRGBA{R: 15, G: 23, B: 42, A: 255})
+	label := canvas.NewText(title, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	label.TextSize = 24
+	content := container.NewVBox(label)
+	content.Move(fyne.NewPos(18, 18))
+	return container.NewStack(bg, container.NewPadded(content))
+}
+
+func statusPill(text string, bg color.Color, fg color.Color) *widget.Button {
+	pill := widget.NewButton(text, nil)
+	pill.Disable()
+	pill.Importance = widget.LowImportance
+	pill.SetText(text)
+	pill.Alignment = widget.ButtonAlignCenter
+	pill.Resize(fyne.NewSize(120, 28))
+	if bg != nil {
+		pill.CreateRenderer()
+	}
+	return pill
+}
+
+func styledActionButton(label string, accent color.Color, importance widget.Importance) *widget.Button {
+	btn := widget.NewButton(label, nil)
+	btn.Importance = importance
+	btn.Importance = importance
+	btn.SetText(label)
+	btn.Resize(fyne.NewSize(120, 36))
+	if accent != nil {
+		btn.Importance = importance
+	}
+	return btn
+}
+
+func newStatusPanel(state *appState) fyne.CanvasObject {
 	state.startBtn = widget.NewButton("Start", func() {
 		if err := startDaemon(state.settings); err != nil {
 			state.appendLog(err.Error())
@@ -440,6 +577,8 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 		}
 		refreshUiState(state)
 	})
+	state.startBtn.Importance = widget.HighImportance
+	state.startBtn.Resize(fyne.NewSize(120, 40))
 	state.stopBtn = widget.NewButton("Stop", func() {
 		dialog.NewConfirm("Stop daemon", "Are you sure you want to stop the autoipo daemon?", func(ok bool) {
 			if !ok {
@@ -453,6 +592,8 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 			refreshUiState(state)
 		}, state.window).Show()
 	})
+	state.stopBtn.Importance = widget.DangerImportance
+	state.stopBtn.Resize(fyne.NewSize(120, 40))
 	state.restartBtn = widget.NewButton("Restart", func() {
 		dialog.NewConfirm("Restart daemon", "Are you sure you want to restart the autoipo daemon?", func(ok bool) {
 			if !ok {
@@ -476,37 +617,60 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 			}
 		}, state.window).Show()
 	})
+	state.restartBtn.Importance = widget.WarningImportance
+	state.restartBtn.Resize(fyne.NewSize(120, 40))
 	state.autoStartBtn = widget.NewButton("Auto-start: ON", func() {
 		state.toggleAutoStart()
 	})
 	state.updateAutoStartButton()
 	state.syncButtonState()
 
-	controls := container.NewHBox(state.startBtn, state.stopBtn, state.restartBtn)
-	autoStartRow := container.NewHBox(
-		widget.NewLabel("Startup mode"),
-		state.autoStartBtn,
-	)
-
-	statusHeader := widget.NewCard("System status", "",
+	summary := widget.NewCard("Daemon overview", "",
 		container.New(layout.NewVBoxLayout(),
-			widget.NewLabel("autoipo"),
+			widget.NewLabel("Host: "+state.settings.HostLabel),
+			widget.NewLabel("Daemon: autoipo"),
+			widget.NewLabel("Mode: Telegram polling"),
+		),
+	)
+	statusCard := widget.NewCard("System status", "",
+		container.New(layout.NewVBoxLayout(),
+			container.NewHBox(
+				canvas.NewText("autoipo", color.NRGBA{R: 168, G: 85, B: 247, A: 255}),
+				layout.NewSpacer(),
+				widget.NewLabel("Live"),
+			),
 			state.status,
-			controls,
-			autoStartRow,
+			container.NewHBox(state.startBtn, state.stopBtn, state.restartBtn),
+			autoStartRow(state.autoStartBtn),
 		),
 	)
 
 	return container.New(layout.NewVBoxLayout(),
-		container.NewPadded(statusHeader),
+		container.NewPadded(statusCard),
 		container.NewPadded(summary),
 	)
+}
+
+func autoStartRow(btn *widget.Button) fyne.CanvasObject {
+	label := widget.NewLabel("Startup mode")
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	return container.NewBorder(nil, nil, nil, nil, container.NewHBox(
+		label,
+		layout.NewSpacer(),
+		btn,
+	))
 }
 
 func newSettingsPanel(state *appState) fyne.CanvasObject {
 	state.labelEntry = widget.NewEntry()
 	state.labelEntry.SetText(state.settings.HostLabel)
 	state.labelEntry.SetPlaceHolder("MyMac")
+	state.labelEntry.OnSubmitted = func(string) {
+		state.settings.HostLabel = state.labelEntry.Text
+		state.settings.Token = state.tokenEntry.Text
+		state.settings.ChatID = state.chatEntry.Text
+		_ = saveSettingsFile(state.settings)
+	}
 
 	state.tokenEntry = widget.NewPasswordEntry()
 	state.tokenEntry.SetText(state.settings.Token)
@@ -543,6 +707,7 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 	form.CancelText = "Reset"
 
 	card := widget.NewCard("Daemon settings", "Configure the bot and host identity", form)
+	card.Subtitle = "Secure settings"
 	return container.NewPadded(card)
 }
 
@@ -550,15 +715,41 @@ func newLogsPanel(state *appState) fyne.CanvasObject {
 	state.refreshLogsBtn = widget.NewButton("Refresh", func() {
 		refreshLogView(state)
 	})
+	state.refreshLogsBtn.Importance = widget.HighImportance
+	state.olderLogsBtn = widget.NewButton("Older", func() {
+		if state.logViewStart <= 0 {
+			return
+		}
+		state.logViewStart = max(0, state.logViewStart-state.logPageSize)
+		refreshLogView(state)
+	})
+	state.newerLogsBtn = widget.NewButton("Newer", func() {
+		text := readLogFile()
+		if text == "" || strings.TrimRight(text, "\n") == "" {
+			return
+		}
+		lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+		total := len(lines)
+		if total <= state.logPageSize {
+			state.logViewStart = 0
+			refreshLogView(state)
+			return
+		}
+		state.logViewStart = min(total-state.logPageSize, state.logViewStart+state.logPageSize)
+		refreshLogView(state)
+	})
+	state.olderLogsBtn.Disable()
+	state.newerLogsBtn.Disable()
 
 	header := container.NewBorder(
 		nil,
 		nil,
 		nil,
-		state.refreshLogsBtn,
+		container.NewHBox(state.newerLogsBtn, state.olderLogsBtn, state.refreshLogsBtn),
 		widget.NewLabel("Live daemon log"),
 	)
-
+	state.logs.Resize(fyne.NewSize(820, 420))
+	refreshLogView(state)
 	return container.NewBorder(
 		header,
 		nil,
@@ -589,7 +780,9 @@ func main() {
 	}()
 
 	a := app.New()
+	a.Settings().SetTheme(&modernAppTheme{})
 	w := a.NewWindow("autoipo")
+	w.SetTitle("autoipo")
 	state := newAppState()
 	if err := ensureAppAutoStartState(state.settings); err != nil {
 		state.appendLog("auto-start sync failed: " + err.Error())
@@ -607,13 +800,20 @@ func main() {
 		}
 	}()
 
+	head := brandHeader("autoipo")
+	statusPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(statusPage))
+	settingsPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(settingsPage))
+	logsPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(logsPage))
+
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Status", statusPage),
 		container.NewTabItem("Settings", settingsPage),
 		container.NewTabItem("Logs", logsPage),
 	)
+	tabs.SetTabLocation(container.TabLocationLeading)
+	tabs.SetTabLocation(container.TabLocationLeading)
 	w.SetContent(tabs)
-	w.Resize(fyne.NewSize(900, 620))
+	w.Resize(fyne.NewSize(980, 660))
 	w.SetMaster()
 	w.ShowAndRun()
 }
