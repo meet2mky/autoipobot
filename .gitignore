@@ -1,4 +1,7 @@
 daemon/autoipo
+autoipoapp
+app/autoipoapp
+app/tmp/
 *.log
 daemon/logs/
 .env
