@@ -1,3 +1,3 @@
-module autoipobot
+module autoipo
 
 go 1.27.2

@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.autoipobot</string>
+    <string>com.autoipo</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/your-user/autoipobot/daemon/autoipobot</string>
+        <string>/Users/your-user/autoipo/daemon/autoipo</string>
     </array>
     <key>WorkingDirectory</key>
-    <string>/Users/your-user/autoipobot/daemon</string>
+    <string>/Users/your-user/autoipo/daemon</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -23,9 +23,5 @@
         <key>HOST_LABEL</key>
         <string>&lt;HOST_LABEL&gt;</string>
     </dict>
-    <key>StandardErrorPath</key>
-    <string>/tmp/autoipobot.log</string>
-    <key>StandardOutPath</key>
-    <string>/tmp/autoipobot.log</string>
 </dict>
 </plist>

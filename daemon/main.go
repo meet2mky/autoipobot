@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,7 +20,7 @@ const (
 	pollTimeout   = 1 * time.Second
 	staleTimeout  = 5 * time.Minute
 	resumeGap     = 3 * time.Minute
-	offsetFileTag = "autoipobot.offset"
+	offsetFileTag = "autoipo.offset"
 )
 
 type config struct {
@@ -55,13 +56,59 @@ type tgSendMessageRequest struct {
 	Text   string `json:"text"`
 }
 
+var (
+	logMu   sync.Mutex
+	logFile *os.File
+)
+
+func resolveLogPathFor(exePath string) (string, error) {
+	logDir := filepath.Join(filepath.Dir(exePath), "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return "", err
+	}
+	return filepath.Join(logDir, "autoipo.log"), nil
+}
+
+func resolveLogPath() string {
+	exePath, err := os.Executable()
+	if err != nil || exePath == "" {
+		return filepath.Join(os.TempDir(), "autoipo.log")
+	}
+	logPath, err := resolveLogPathFor(exePath)
+	if err != nil {
+		return filepath.Join(os.TempDir(), "autoipo.log")
+	}
+	return logPath
+}
+
+func initLogger() {
+	path := resolveLogPath()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	logFile = file
+}
+
+func closeLogger() {
+	logMu.Lock()
+	defer logMu.Unlock()
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+	}
+}
+
 func main() {
+	initLogger()
+	defer closeLogger()
+
 	cfg, err := loadConfig()
 	if err != nil {
 		logLine("loadConfig failed: " + err.Error())
 		os.Exit(1)
 	}
-	logLine(fmt.Sprintf("starting autoipobot for host=%s chat=%d", cfg.Label, cfg.Chat))
+	logLine(fmt.Sprintf("starting autoipo for host=%s chat=%d", cfg.Label, cfg.Chat))
 
 	offsetPath := filepath.Join(os.TempDir(), offsetFileTag)
 	offset, err := loadOffset(offsetPath)
@@ -133,7 +180,7 @@ func loadConfig() (*config, error) {
 	}
 	label := strings.TrimSpace(os.Getenv("HOST_LABEL"))
 	if label == "" {
-		label = "AUTOIPOBOT"
+		label = "AUTOIPO"
 	}
 	return &config{Token: token, Chat: chatID, Label: label}, nil
 }
@@ -149,7 +196,7 @@ func getUpdates(token string, offset int64) ([]update, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", "autoipobot/1.0")
+	req.Header.Set("User-Agent", "autoipo/1.0")
 
 	resp, err := (&http.Client{Timeout: pollTimeout + 10*time.Second}).Do(req)
 	if err != nil {
@@ -194,7 +241,19 @@ func parseCommand(raw string) string {
 }
 
 func logLine(msg string) {
-	fmt.Fprintf(os.Stderr, "%s %s\n", time.Now().Format(time.RFC3339), msg)
+	line := fmt.Sprintf("%s %s\n", time.Now().Format(time.RFC3339), msg)
+	if _, err := fmt.Fprint(os.Stderr, line); err != nil {
+		_ = err
+	}
+
+	logMu.Lock()
+	defer logMu.Unlock()
+	if logFile != nil {
+		if _, err := logFile.WriteString(line); err != nil {
+			_ = logFile.Close()
+			logFile = nil
+		}
+	}
 }
 
 func handleMessage(cfg *config, msg *message) error {
@@ -246,7 +305,7 @@ func sendText(token string, chatID int64, text string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "autoipobot/1.0")
+	req.Header.Set("User-Agent", "autoipo/1.0")
 
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {

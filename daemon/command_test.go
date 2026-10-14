@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -28,18 +29,30 @@ func TestLogLine(t *testing.T) {
 	}
 }
 
+func TestResolveLogPathUsesAppDirectory(t *testing.T) {
+	exePath := filepath.Join(t.TempDir(), "bin", "autoipo")
+	if err := os.MkdirAll(filepath.Dir(exePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	want := filepath.Join(filepath.Dir(exePath), "logs", "autoipo.log")
+	if got, err := resolveLogPathFor(exePath); err != nil || got != want {
+		t.Fatalf("resolveLogPathFor(%q) = (%q, %v), want (%q, nil)", exePath, got, err, want)
+	}
+}
+
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
 		name     string
 		raw      string
 		expected string
 	}{
-		{name: "strip mention and trim", raw: " /PING@autoipobot ", expected: "ping"},
+		{name: "strip mention and trim", raw: " /PING@autoipo ", expected: "ping"},
 		{name: "lowercase command", raw: "Status", expected: "status"},
-		{name: "status command", raw: "/status@autoipobot", expected: "status"},
-		{name: "help command", raw: "/help@autoipobot", expected: "help"},
+		{name: "status command", raw: "/status@autoipo", expected: "status"},
+		{name: "help command", raw: "/help@autoipo", expected: "help"},
 		{name: "empty text", raw: "   ", expected: ""},
-		{name: "empty after mention", raw: "@autoipobot", expected: ""},
+		{name: "empty after mention", raw: "@autoipo", expected: ""},
 		{name: "status without slash", raw: "STATUS", expected: "status"},
 	}
 

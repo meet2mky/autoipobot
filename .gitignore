@@ -1,7 +1,8 @@
-daemon/autoipobot
+daemon/autoipo
 *.log
+daemon/logs/
 .env
-deploy/com.autoipobot.plist
+deploy/com.autoipo.plist
 logs/
 .DS_Store
 **/.DS_Store
