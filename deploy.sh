@@ -87,16 +87,20 @@ EOF
 
   mkdir -p "$(dirname "$TARGET_LAUNCHAGENT")"
 
-  if [[ -f "$TARGET_LAUNCHAGENT" ]] || launchctl print gui/"$(id -u)" com.autoipo >/dev/null 2>&1; then
-    echo "Stopping previous autoipo LaunchAgent..."
-    launchctl bootout gui/"$(id -u)" "$TARGET_LAUNCHAGENT" 2>/dev/null || true
-    launchctl unload -w "$TARGET_LAUNCHAGENT" 2>/dev/null || true
-    launchctl remove gui/"$(id -u)"/com.autoipo >/dev/null 2>&1 || true
-  fi
+  for label in com.autoipo com.autoipobot; do
+    plist="$HOME/Library/LaunchAgents/${label}.plist"
+    if [[ -f "$plist" ]] || launchctl print gui/"$(id -u)" "$label" >/dev/null 2>&1; then
+      echo "Stopping previous $label LaunchAgent..."
+      launchctl bootout gui/"$(id -u)" "$plist" 2>/dev/null || true
+      launchctl unload -w "$plist" 2>/dev/null || true
+      launchctl remove gui/"$(id -u)"/"$label" >/dev/null 2>&1 || true
+      rm -f "$plist"
+    fi
+  done
 
   while read -r pid; do
     kill "$pid" 2>/dev/null || true
-  done < <(ps -axo pid,command | awk '$2 ~ /autoipo/ {print $1}')
+  done < <(ps -axo pid,command | awk '$2 ~ /autoipo/ || $2 ~ /autoipobot/ {print $1}')
 
   if [[ -f "$TARGET_LAUNCHAGENT" ]]; then
     rm -f "$TARGET_LAUNCHAGENT"

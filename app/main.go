@@ -112,7 +112,7 @@ func readLogFile() string {
 func daemonRunning() (bool, error) {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd := exec.Command("bash", "-lc", "launchctl print gui/$(id -u)/com.autoipo >/dev/null 2>&1 && echo running || echo stopped")
+		cmd := exec.Command("bash", "-lc", "for label in com.autoipo com.autoipobot; do if launchctl print gui/$(id -u)/$label >/dev/null 2>&1; then echo running; exit 0; fi; done; echo stopped")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return false, err
@@ -152,7 +152,7 @@ func startDaemon(cfg daemonSettings) error {
 func stopDaemon() error {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd := exec.Command("bash", "-lc", "launchctl bootout gui/$(id -u) /Users/$(whoami)/Library/LaunchAgents/com.autoipo.plist 2>/dev/null || true; launchctl unload -w /Users/$(whoami)/Library/LaunchAgents/com.autoipo.plist 2>/dev/null || true; pkill -f \"/Users/$(whoami)/Desktop/autoipobot/daemon/autoipo\" 2>/dev/null || true")
+		cmd := exec.Command("bash", "-lc", "for label in com.autoipo com.autoipobot; do plist=\"$HOME/Library/LaunchAgents/${label}.plist\"; launchctl bootout gui/$(id -u) \"$plist\" 2>/dev/null || true; launchctl unload -w \"$plist\" 2>/dev/null || true; launchctl remove gui/$(id -u)/$label 2>/dev/null || true; rm -f \"$plist\"; done; while read -r pid; do kill \"$pid\" 2>/dev/null || true; done < <(ps -axo pid,command | awk '$2 ~ /autoipo/ || $2 ~ /autoipobot/ {print $1}')")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("stop failed: %w: %s", err, strings.TrimSpace(string(out)))
