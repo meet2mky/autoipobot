@@ -137,20 +137,30 @@ func main() {
 
 	lastPoll := time.Now()
 	resumeSent := false
+	lastIdlePollLog := time.Time{}
 	for {
 		if time.Since(lastPoll) > resumeGap && !resumeSent {
 			asyncSendText(cfg.Token, cfg.Chat, fmt.Sprintf("%s RESUMED after %s", cfg.Label, formatDuration(time.Since(lastPoll))))
 			resumeSent = true
 		}
 
-		logLine(fmt.Sprintf("polling telegram with offset=%d", offset))
 		updates, err := getUpdates(cfg.Token, offset)
 		if err != nil {
 			logLine("getUpdates failed: " + err.Error())
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		logLine(fmt.Sprintf("getUpdates returned %d update(s) at offset=%d", len(updates), offset))
+		if len(updates) == 0 {
+			if lastIdlePollLog.IsZero() || time.Since(lastIdlePollLog) >= 30*time.Second {
+				logLine(fmt.Sprintf("telegram idle offset=%d", offset))
+				lastIdlePollLog = time.Now()
+			}
+			lastPoll = time.Now()
+			resumeSent = false
+			continue
+		}
+		logLine(fmt.Sprintf("telegram poll offset=%d -> %d update(s)", offset, len(updates)))
+		lastIdlePollLog = time.Time{}
 
 		lastPoll = time.Now()
 		resumeSent = false
