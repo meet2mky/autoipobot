@@ -9,3 +9,4 @@ deploy/com.autoipo.plist
 logs/
 .DS_Store
 **/.DS_Store
+.vscode/
