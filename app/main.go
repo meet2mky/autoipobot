@@ -350,6 +350,21 @@ func newLogsPanel(state *appState) fyne.CanvasObject {
 }
 
 func main() {
+	lockFile, acquired, err := acquireSingleInstanceLock(instanceLockPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create app lock: %v\n", err)
+		os.Exit(1)
+	}
+	if !acquired {
+		fmt.Fprintln(os.Stderr, "autoipo is already running. Only one instance is allowed.")
+		return
+	}
+	defer func() {
+		if err := releaseSingleInstanceLock(lockFile); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to release app lock: %v\n", err)
+		}
+	}()
+
 	a := app.New()
 	w := a.NewWindow("autoipo")
 	state := newAppState()
