@@ -103,6 +103,21 @@ func main() {
 	initLogger()
 	defer closeLogger()
 
+	lockFile, acquired, err := acquireSingleInstanceLock(daemonLockPath())
+	if err != nil {
+		logLine("failed to acquire daemon lock: " + err.Error())
+		os.Exit(1)
+	}
+	if !acquired {
+		logLine("another autoipo daemon instance is already running; exiting")
+		return
+	}
+	defer func() {
+		if err := releaseSingleInstanceLock(lockFile); err != nil {
+			logLine("failed to release daemon lock: " + err.Error())
+		}
+	}()
+
 	cfg, err := loadConfig()
 	if err != nil {
 		logLine("loadConfig failed: " + err.Error())
