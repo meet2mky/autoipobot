@@ -28,6 +28,28 @@ Do not print or commit the Telegram token or chat ID. Keep values in the environ
 
 Runtime logs are created automatically next to the installed binary in a `logs/autoipo.log` file, so there is no checked-in log file to manage.
 
+## Clean deploy (recommended)
+
+```bash
+cd /Users/mohityadav/Desktop/autoipobot
+TG_TOKEN="<TOKEN>" \
+TG_CHAT_ID="<CHAT_ID>" \
+HOST_LABEL="MyMac" \
+./deploy.sh
+```
+
+This is the clean, repeatable install path for macOS. It rebuilds the daemon, removes any previous LaunchAgent state, kills stale daemon processes, clears the old log file, and reinstalls the service.
+
+If you want to force a full reset manually before the script:
+
+```bash
+launchctl bootout gui/"$(id -u)" /Users/"$(whoami)"/Library/LaunchAgents/com.autoipo.plist 2>/dev/null || true
+pkill -f "/Users/$(whoami)/Desktop/autoipobot/daemon/autoipo" 2>/dev/null || true
+rm -f /Users/"$(whoami)"/Desktop/autoipobot/daemon/logs/autoipo.log 2>/dev/null || true
+```
+
+Then run the same `./deploy.sh` command again.
+
 ## LaunchAgent install
 
 ```bash
