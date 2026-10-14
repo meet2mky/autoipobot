@@ -33,7 +33,30 @@ type appState struct {
 	chatEntry   *widget.Entry
 	startBtn    *widget.Button
 	stopBtn     *widget.Button
-	restartBtn  *widget.Button
+	restartBtn *widget.Button
+}
+
+var appLockFile *os.File
+
+func relaunchCurrentApp() error {
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find app binary: %w", err)
+	}
+	if appLockFile != nil {
+		if err := releaseSingleInstanceLock(appLockFile); err != nil {
+			return fmt.Errorf("release app lock: %w", err)
+		}
+		appLockFile = nil
+	}
+	cmd := exec.Command(execPath)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start replacement app: %w", err)
+	}
+	os.Exit(0)
+	return nil
 }
 
 func repoRoot() string {
@@ -152,7 +175,16 @@ func startDaemon(cfg daemonSettings) error {
 func stopDaemon() error {
 	switch runtime.GOOS {
 	case "darwin":
-		cmd := exec.Command("bash", "-lc", "for label in com.autoipo com.autoipobot; do plist=\"$HOME/Library/LaunchAgents/${label}.plist\"; launchctl bootout gui/$(id -u) \"$plist\" 2>/dev/null || true; launchctl unload -w \"$plist\" 2>/dev/null || true; launchctl remove gui/$(id -u)/$label 2>/dev/null || true; rm -f \"$plist\"; done; while read -r pid; do kill \"$pid\" 2>/dev/null || true; done < <(ps -axo pid,command | awk '$2 ~ /autoipo/ || $2 ~ /autoipobot/ {print $1}')")
+		cmd := exec.Command("bash", "-lc", `for label in com.autoipo com.autoipobot; do
+  plist="$HOME/Library/LaunchAgents/${label}.plist"
+  launchctl bootout gui/$(id -u) "$plist" 2>/dev/null || true
+  launchctl unload -w "$plist" 2>/dev/null || true
+  launchctl remove gui/$(id -u)/$label 2>/dev/null || true
+  rm -f "$plist"
+done
+while read -r pid; do
+  kill "$pid" 2>/dev/null || true
+done < <(ps -axo pid,command | awk '($2 ~ /\/daemon\/autoipo$/ || $2 ~ /\/daemon\/autoipobot$/ || $2 == "autoipo" || $2 == "autoipobot") && $2 !~ /autoipoapp/ {print $1}')`)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("stop failed: %w: %s", err, strings.TrimSpace(string(out)))
@@ -282,7 +314,11 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 			state.setStatus("Error")
 			return
 		}
-		refreshUiState(state)
+		if err := relaunchCurrentApp(); err != nil {
+			state.appendLog("relaunch failed: " + err.Error())
+			state.setStatus("Error")
+			return
+		}
 	})
 	state.syncButtonState()
 
@@ -361,9 +397,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, "autoipo is already running. Only one instance is allowed.")
 		return
 	}
+	appLockFile = lockFile
 	defer func() {
-		if err := releaseSingleInstanceLock(lockFile); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to release app lock: %v\n", err)
+		if appLockFile != nil {
+			if err := releaseSingleInstanceLock(appLockFile); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to release app lock: %v\n", err)
+			}
+			appLockFile = nil
 		}
 	}()
 
