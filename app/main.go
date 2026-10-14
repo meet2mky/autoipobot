@@ -200,19 +200,21 @@ func (s *appState) syncButtonState() {
 
 func refreshUiState(state *appState) {
 	running, err := daemonRunning()
-	if err != nil {
-		state.setStatus("Unknown")
-		state.appendLog("status check failed: " + err.Error())
+	fyne.Do(func() {
+		if err != nil {
+			state.setStatus("Unknown")
+			state.appendLog("status check failed: " + err.Error())
+			state.syncButtonState()
+			return
+		}
+		if running {
+			state.setStatus("Running")
+		} else {
+			state.setStatus("Stopped")
+		}
+		state.logs.SetText(readLogFile())
 		state.syncButtonState()
-		return
-	}
-	if running {
-		state.setStatus("Running")
-	} else {
-		state.setStatus("Stopped")
-	}
-	state.logs.SetText(readLogFile())
-	state.syncButtonState()
+	})
 }
 
 func newAppState() *appState {
