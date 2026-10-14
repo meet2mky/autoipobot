@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
 )
@@ -21,19 +22,23 @@ type daemonSettings struct {
 	Token     string
 	ChatID    string
 	HostLabel string
+	AutoStart bool
 }
 
 type appState struct {
-	status      *widget.Label
-	logs        *widget.Entry
-	repoRoot    string
-	settings    daemonSettings
-	labelEntry  *widget.Entry
-	tokenEntry  *widget.Entry
-	chatEntry   *widget.Entry
-	startBtn    *widget.Button
-	stopBtn     *widget.Button
-	restartBtn *widget.Button
+	status         *widget.Label
+	logs           *widget.Entry
+	repoRoot       string
+	settings       daemonSettings
+	labelEntry     *widget.Entry
+	tokenEntry     *widget.Entry
+	chatEntry      *widget.Entry
+	startBtn       *widget.Button
+	stopBtn        *widget.Button
+	restartBtn     *widget.Button
+	refreshLogsBtn *widget.Button
+	autoStartBtn   *widget.Button
+	window         fyne.Window
 }
 
 var appLockFile *os.File
@@ -74,11 +79,106 @@ func repoRoot() string {
 	return filepath.Join(".")
 }
 
+func appAutoStartLabel() string {
+	return "com.autoipo.app"
+}
+
+func appAutoStartPlistPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(repoRoot(), "deploy", appAutoStartLabel()+".plist")
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", appAutoStartLabel()+".plist")
+}
+
+func appLaunchAgentPlistContent(execPath string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>%s</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>%s</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>
+`, appAutoStartLabel(), execPath)
+}
+
+func installAppAutoStart() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("find app binary: %w", err)
+	}
+	plistPath := appAutoStartPlistPath()
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		return fmt.Errorf("create launch agents dir: %w", err)
+	}
+	if err := os.WriteFile(plistPath, []byte(appLaunchAgentPlistContent(execPath)), 0o600); err != nil {
+		return fmt.Errorf("write launch agent: %w", err)
+	}
+	label := appAutoStartLabel()
+	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl bootout gui/$(id -u) %q 2>/dev/null || true; launchctl unload -w %q 2>/dev/null || true; launchctl remove gui/$(id -u)/%s 2>/dev/null || true; launchctl bootstrap gui/$(id -u) %q; launchctl kickstart -k gui/$(id -u)/%s", plistPath, plistPath, label, plistPath, label))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("load launch agent: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func uninstallAppAutoStart() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	plistPath := appAutoStartPlistPath()
+	label := appAutoStartLabel()
+	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl bootout gui/$(id -u) %q 2>/dev/null || true; launchctl unload -w %q 2>/dev/null || true; launchctl remove gui/$(id -u)/%s 2>/dev/null || true; rm -f %q", plistPath, plistPath, label, plistPath))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("unload launch agent: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func ensureAppAutoStartState(cfg daemonSettings) error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl print gui/$(id -u)/%s >/dev/null 2>&1 && echo enabled || echo disabled", appAutoStartLabel()))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("check launch agent: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	enabled := strings.TrimSpace(string(out)) == "enabled"
+	if cfg.AutoStart && !enabled {
+		return installAppAutoStart()
+	}
+	if !cfg.AutoStart && enabled {
+		return uninstallAppAutoStart()
+	}
+	return nil
+}
+
 func loadSettings() daemonSettings {
 	cfg := daemonSettings{
 		Token:     os.Getenv("TG_TOKEN"),
 		ChatID:    os.Getenv("TG_CHAT_ID"),
 		HostLabel: os.Getenv("HOST_LABEL"),
+		AutoStart: true,
+	}
+	if v := strings.TrimSpace(os.Getenv("AUTO_START")); v != "" {
+		cfg.AutoStart = strings.EqualFold(v, "true") || v == "1"
 	}
 	if cfg.HostLabel == "" || cfg.Token == "" || cfg.ChatID == "" {
 		path := filepath.Join(repoRoot(), ".env")
@@ -102,6 +202,8 @@ func loadSettings() daemonSettings {
 					if cfg.ChatID == "" { cfg.ChatID = value }
 				case "HOST_LABEL":
 					if cfg.HostLabel == "" { cfg.HostLabel = value }
+				case "AUTO_START":
+					if value != "" { cfg.AutoStart = strings.EqualFold(value, "true") || value == "1" }
 				}
 			}
 		}
@@ -114,7 +216,7 @@ func loadSettings() daemonSettings {
 
 func saveSettingsFile(cfg daemonSettings) error {
 	path := filepath.Join(repoRoot(), ".env")
-	content := fmt.Sprintf("TG_TOKEN=%s\nTG_CHAT_ID=%s\nHOST_LABEL=%s\n", cfg.Token, cfg.ChatID, cfg.HostLabel)
+	content := fmt.Sprintf("TG_TOKEN=%s\nTG_CHAT_ID=%s\nHOST_LABEL=%s\nAUTO_START=%t\n", cfg.Token, cfg.ChatID, cfg.HostLabel, cfg.AutoStart)
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
@@ -230,6 +332,12 @@ func (s *appState) syncButtonState() {
 	}
 }
 
+func refreshLogView(state *appState) {
+	fyne.Do(func() {
+		state.logs.SetText(readLogFile())
+	})
+}
+
 func refreshUiState(state *appState) {
 	running, err := daemonRunning()
 	fyne.Do(func() {
@@ -276,13 +384,51 @@ func (s *appState) appendLog(msg string) {
 	s.logs.SetText(text)
 }
 
+func (s *appState) updateAutoStartButton() {
+	if s.autoStartBtn == nil {
+		return
+	}
+	if s.settings.AutoStart {
+		s.autoStartBtn.SetText("Auto-start: ON")
+		s.autoStartBtn.Importance = widget.SuccessImportance
+	} else {
+		s.autoStartBtn.SetText("Auto-start: OFF")
+		s.autoStartBtn.Importance = widget.DangerImportance
+	}
+	s.autoStartBtn.Refresh()
+}
+
+func (s *appState) toggleAutoStart() {
+	desired := !s.settings.AutoStart
+	var err error
+	if desired {
+		err = installAppAutoStart()
+	} else {
+		err = uninstallAppAutoStart()
+	}
+	if err != nil {
+		s.appendLog("auto-start update failed: " + err.Error())
+		return
+	}
+	s.settings.AutoStart = desired
+	if err := saveSettingsFile(s.settings); err != nil {
+		s.appendLog("save settings failed: " + err.Error())
+		return
+	}
+	s.updateAutoStartButton()
+	if s.settings.AutoStart {
+		s.appendLog("auto-start enabled")
+	} else {
+		s.appendLog("auto-start disabled")
+	}
+}
+
 func newStatusPanel(state *appState) fyne.CanvasObject {
-	card := widget.NewCard("Overview", "",
+	summary := widget.NewCard("Daemon overview", "",
 		container.New(layout.NewVBoxLayout(),
 			widget.NewLabel("Host: "+state.settings.HostLabel),
 			widget.NewLabel("Daemon: autoipo"),
 			widget.NewLabel("Mode: Telegram polling"),
-			widget.NewLabel("Auto-start: enabled"),
 		),
 	)
 
@@ -295,50 +441,65 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 		refreshUiState(state)
 	})
 	state.stopBtn = widget.NewButton("Stop", func() {
-		if err := stopDaemon(); err != nil {
-			state.appendLog(err.Error())
-			state.setStatus("Error")
-			return
-		}
-		refreshUiState(state)
+		dialog.NewConfirm("Stop daemon", "Are you sure you want to stop the autoipo daemon?", func(ok bool) {
+			if !ok {
+				return
+			}
+			if err := stopDaemon(); err != nil {
+				state.appendLog(err.Error())
+				state.setStatus("Error")
+				return
+			}
+			refreshUiState(state)
+		}, state.window).Show()
 	})
 	state.restartBtn = widget.NewButton("Restart", func() {
-		if err := stopDaemon(); err != nil {
-			state.appendLog(err.Error())
-			state.setStatus("Error")
-			return
-		}
-		time.Sleep(300 * time.Millisecond)
-		if err := startDaemon(state.settings); err != nil {
-			state.appendLog(err.Error())
-			state.setStatus("Error")
-			return
-		}
-		if err := relaunchCurrentApp(); err != nil {
-			state.appendLog("relaunch failed: " + err.Error())
-			state.setStatus("Error")
-			return
-		}
+		dialog.NewConfirm("Restart daemon", "Are you sure you want to restart the autoipo daemon?", func(ok bool) {
+			if !ok {
+				return
+			}
+			if err := stopDaemon(); err != nil {
+				state.appendLog(err.Error())
+				state.setStatus("Error")
+				return
+			}
+			time.Sleep(300 * time.Millisecond)
+			if err := startDaemon(state.settings); err != nil {
+				state.appendLog(err.Error())
+				state.setStatus("Error")
+				return
+			}
+			if err := relaunchCurrentApp(); err != nil {
+				state.appendLog("relaunch failed: " + err.Error())
+				state.setStatus("Error")
+				return
+			}
+		}, state.window).Show()
 	})
+	state.autoStartBtn = widget.NewButton("Auto-start: ON", func() {
+		state.toggleAutoStart()
+	})
+	state.updateAutoStartButton()
 	state.syncButtonState()
 
 	controls := container.NewHBox(state.startBtn, state.stopBtn, state.restartBtn)
+	autoStartRow := container.NewHBox(
+		widget.NewLabel("Startup mode"),
+		state.autoStartBtn,
+	)
 
-	statusTop := container.NewPadded(container.NewBorder(
-		nil,
-		nil,
-		nil,
-		nil,
+	statusHeader := widget.NewCard("System status", "",
 		container.New(layout.NewVBoxLayout(),
 			widget.NewLabel("autoipo"),
 			state.status,
 			controls,
+			autoStartRow,
 		),
-	))
+	)
 
 	return container.New(layout.NewVBoxLayout(),
-		statusTop,
-		card,
+		container.NewPadded(statusHeader),
+		container.NewPadded(summary),
 	)
 }
 
@@ -380,11 +541,31 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 
 	form.SubmitText = "Save"
 	form.CancelText = "Reset"
-	return container.NewPadded(form)
+
+	card := widget.NewCard("Daemon settings", "Configure the bot and host identity", form)
+	return container.NewPadded(card)
 }
 
 func newLogsPanel(state *appState) fyne.CanvasObject {
-	return container.NewPadded(state.logs)
+	state.refreshLogsBtn = widget.NewButton("Refresh", func() {
+		refreshLogView(state)
+	})
+
+	header := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		state.refreshLogsBtn,
+		widget.NewLabel("Live daemon log"),
+	)
+
+	return container.NewBorder(
+		header,
+		nil,
+		nil,
+		nil,
+		container.NewPadded(state.logs),
+	)
 }
 
 func main() {
@@ -410,6 +591,10 @@ func main() {
 	a := app.New()
 	w := a.NewWindow("autoipo")
 	state := newAppState()
+	if err := ensureAppAutoStartState(state.settings); err != nil {
+		state.appendLog("auto-start sync failed: " + err.Error())
+	}
+	state.window = w
 	refreshUiState(state)
 
 	statusPage := newStatusPanel(state)
