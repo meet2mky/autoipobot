@@ -24,14 +24,16 @@ type daemonSettings struct {
 }
 
 type appState struct {
-	status         *widget.Label
-	logs           *widget.Entry
-	repoRoot       string
-	settings       daemonSettings
-	settingsForm   *widget.Form
-	labelEntry     *widget.Entry
-	tokenEntry     *widget.Entry
-	chatEntry      *widget.Entry
+	status      *widget.Label
+	logs        *widget.Entry
+	repoRoot    string
+	settings    daemonSettings
+	labelEntry  *widget.Entry
+	tokenEntry  *widget.Entry
+	chatEntry   *widget.Entry
+	startBtn    *widget.Button
+	stopBtn     *widget.Button
+	restartBtn  *widget.Button
 }
 
 func repoRoot() string {
@@ -54,6 +56,32 @@ func loadSettings() daemonSettings {
 		Token:     os.Getenv("TG_TOKEN"),
 		ChatID:    os.Getenv("TG_CHAT_ID"),
 		HostLabel: os.Getenv("HOST_LABEL"),
+	}
+	if cfg.HostLabel == "" || cfg.Token == "" || cfg.ChatID == "" {
+		path := filepath.Join(repoRoot(), ".env")
+		data, err := os.ReadFile(path)
+		if err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				switch key {
+				case "TG_TOKEN":
+					if cfg.Token == "" { cfg.Token = value }
+				case "TG_CHAT_ID":
+					if cfg.ChatID == "" { cfg.ChatID = value }
+				case "HOST_LABEL":
+					if cfg.HostLabel == "" { cfg.HostLabel = value }
+				}
+			}
+		}
 	}
 	if cfg.HostLabel == "" {
 		cfg.HostLabel = "MyMac"
@@ -145,11 +173,37 @@ func stopDaemon() error {
 	}
 }
 
+func (s *appState) syncButtonState() {
+	if s.startBtn == nil || s.stopBtn == nil || s.restartBtn == nil {
+		return
+	}
+	running, err := daemonRunning()
+	if err != nil {
+		s.startBtn.Disable()
+		s.stopBtn.Disable()
+		s.restartBtn.Disable()
+		return
+	}
+	s.startBtn.Enable()
+	s.stopBtn.Enable()
+	s.restartBtn.Enable()
+	if running {
+		s.startBtn.Disable()
+		s.stopBtn.Enable()
+		s.restartBtn.Enable()
+	} else {
+		s.startBtn.Enable()
+		s.stopBtn.Disable()
+		s.restartBtn.Enable()
+	}
+}
+
 func refreshUiState(state *appState) {
 	running, err := daemonRunning()
 	if err != nil {
 		state.setStatus("Unknown")
 		state.appendLog("status check failed: " + err.Error())
+		state.syncButtonState()
 		return
 	}
 	if running {
@@ -158,6 +212,7 @@ func refreshUiState(state *appState) {
 		state.setStatus("Stopped")
 	}
 	state.logs.SetText(readLogFile())
+	state.syncButtonState()
 }
 
 func newAppState() *appState {
@@ -197,38 +252,39 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 		),
 	)
 
-	controls := container.NewHBox(
-		widget.NewButton("Start", func() {
-			if err := startDaemon(state.settings); err != nil {
-				state.appendLog(err.Error())
-				state.setStatus("Error")
-				return
-			}
-			refreshUiState(state)
-		}),
-		widget.NewButton("Stop", func() {
-			if err := stopDaemon(); err != nil {
-				state.appendLog(err.Error())
-				state.setStatus("Error")
-				return
-			}
-			refreshUiState(state)
-		}),
-		widget.NewButton("Restart", func() {
-			if err := stopDaemon(); err != nil {
-				state.appendLog(err.Error())
-				state.setStatus("Error")
-				return
-			}
-			time.Sleep(300 * time.Millisecond)
-			if err := startDaemon(state.settings); err != nil {
-				state.appendLog(err.Error())
-				state.setStatus("Error")
-				return
-			}
-			refreshUiState(state)
-		}),
-	)
+	state.startBtn = widget.NewButton("Start", func() {
+		if err := startDaemon(state.settings); err != nil {
+			state.appendLog(err.Error())
+			state.setStatus("Error")
+			return
+		}
+		refreshUiState(state)
+	})
+	state.stopBtn = widget.NewButton("Stop", func() {
+		if err := stopDaemon(); err != nil {
+			state.appendLog(err.Error())
+			state.setStatus("Error")
+			return
+		}
+		refreshUiState(state)
+	})
+	state.restartBtn = widget.NewButton("Restart", func() {
+		if err := stopDaemon(); err != nil {
+			state.appendLog(err.Error())
+			state.setStatus("Error")
+			return
+		}
+		time.Sleep(300 * time.Millisecond)
+		if err := startDaemon(state.settings); err != nil {
+			state.appendLog(err.Error())
+			state.setStatus("Error")
+			return
+		}
+		refreshUiState(state)
+	})
+	state.syncButtonState()
+
+	controls := container.NewHBox(state.startBtn, state.stopBtn, state.restartBtn)
 
 	statusTop := container.NewPadded(container.NewBorder(
 		nil,
@@ -302,6 +358,12 @@ func main() {
 	statusPage := newStatusPanel(state)
 	settingsPage := newSettingsPanel(state)
 	logsPage := newLogsPanel(state)
+
+	go func() {
+		for range time.Tick(3 * time.Second) {
+			refreshUiState(state)
+		}
+	}()
 
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Status", statusPage),
