@@ -770,6 +770,23 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 				return
 			}
 			state.appendLog("settings saved")
+			dialog.NewConfirm("Restart daemon?", "Your updated settings are saved. Do you want to restart the daemon now so the new values take effect immediately?", func(ok bool) {
+				if !ok {
+					return
+				}
+				if err := stopDaemon(); err != nil {
+					state.appendLog("stop daemon after save failed: " + err.Error())
+					state.setStatus("Error")
+					return
+				}
+				time.Sleep(300 * time.Millisecond)
+				if err := startDaemon(state.settings); err != nil {
+					state.appendLog("start daemon after save failed: " + err.Error())
+					state.setStatus("Error")
+					return
+				}
+				refreshUiState(state)
+			}, state.window).Show()
 		},
 		OnCancel: func() {
 			state.labelEntry.SetText("")
