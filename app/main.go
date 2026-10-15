@@ -22,10 +22,10 @@ import (
 )
 
 type daemonSettings struct {
-	Token     string
-	ChatID    string
-	HostLabel string
-	AutoStart bool
+	Token        string
+	ChatID       string
+	HostLabel    string
+	StartOnLogin bool
 }
 
 type appState struct {
@@ -42,7 +42,7 @@ type appState struct {
 	refreshLogsBtn *widget.Button
 	olderLogsBtn   *widget.Button
 	newerLogsBtn   *widget.Button
-	autoStartBtn   *widget.Button
+	launchOnLoginBtn *widget.Button
 	window         fyne.Window
 	logViewStart   int
 	logPageSize    int
@@ -127,16 +127,16 @@ func repoRoot() string {
 	return filepath.Join(".")
 }
 
-func appAutoStartLabel() string {
+func appLaunchOnLoginLabel() string {
 	return "com.autoipo.app"
 }
 
-func appAutoStartPlistPath() string {
+func appLaunchOnLoginPlistPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return filepath.Join(repoRoot(), "deploy", appAutoStartLabel()+".plist")
+		return filepath.Join(repoRoot(), "deploy", appLaunchOnLoginLabel()+".plist")
 	}
-	return filepath.Join(home, "Library", "LaunchAgents", appAutoStartLabel()+".plist")
+	return filepath.Join(home, "Library", "LaunchAgents", appLaunchOnLoginLabel()+".plist")
 }
 
 func appLaunchAgentPlistContent(execPath string) string {
@@ -158,7 +158,7 @@ func appLaunchAgentPlistContent(execPath string) string {
     <string>Interactive</string>
 </dict>
 </plist>
-`, appAutoStartLabel(), execPath)
+`, appLaunchOnLoginLabel(), execPath)
 }
 
 func installAppAutoStart() error {
@@ -169,14 +169,14 @@ func installAppAutoStart() error {
 	if err != nil {
 		return fmt.Errorf("find app binary: %w", err)
 	}
-	plistPath := appAutoStartPlistPath()
+	plistPath := appLaunchOnLoginPlistPath()
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		return fmt.Errorf("create launch agents dir: %w", err)
 	}
 	if err := os.WriteFile(plistPath, []byte(appLaunchAgentPlistContent(execPath)), 0o600); err != nil {
 		return fmt.Errorf("write launch agent: %w", err)
 	}
-	label := appAutoStartLabel()
+	label := appLaunchOnLoginLabel()
 	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl bootout gui/$(id -u) %q 2>/dev/null || true; launchctl unload -w %q 2>/dev/null || true; launchctl remove gui/$(id -u)/%s 2>/dev/null || true; launchctl bootstrap gui/$(id -u) %q; launchctl kickstart -k gui/$(id -u)/%s", plistPath, plistPath, label, plistPath, label))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -189,8 +189,8 @@ func uninstallAppAutoStart() error {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	plistPath := appAutoStartPlistPath()
-	label := appAutoStartLabel()
+	plistPath := appLaunchOnLoginPlistPath()
+	label := appLaunchOnLoginLabel()
 	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl bootout gui/$(id -u) %q 2>/dev/null || true; launchctl unload -w %q 2>/dev/null || true; launchctl remove gui/$(id -u)/%s 2>/dev/null || true; rm -f %q", plistPath, plistPath, label, plistPath))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -203,16 +203,16 @@ func ensureAppAutoStartState(cfg daemonSettings) error {
 	if runtime.GOOS != "darwin" {
 		return nil
 	}
-	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl print gui/$(id -u)/%s >/dev/null 2>&1 && echo enabled || echo disabled", appAutoStartLabel()))
+	cmd := exec.Command("bash", "-lc", fmt.Sprintf("launchctl print gui/$(id -u)/%s >/dev/null 2>&1 && echo enabled || echo disabled", appLaunchOnLoginLabel()))
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("check launch agent: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	enabled := strings.TrimSpace(string(out)) == "enabled"
-	if cfg.AutoStart && !enabled {
+	if cfg.StartOnLogin && !enabled {
 		return installAppAutoStart()
 	}
-	if !cfg.AutoStart && enabled {
+	if !cfg.StartOnLogin && enabled {
 		return uninstallAppAutoStart()
 	}
 	return nil
@@ -220,13 +220,13 @@ func ensureAppAutoStartState(cfg daemonSettings) error {
 
 func loadSettings() daemonSettings {
 	cfg := daemonSettings{
-		Token:     os.Getenv("TG_TOKEN"),
-		ChatID:    os.Getenv("TG_CHAT_ID"),
-		HostLabel: os.Getenv("HOST_LABEL"),
-		AutoStart: true,
+		Token:        os.Getenv("TG_TOKEN"),
+		ChatID:       os.Getenv("TG_CHAT_ID"),
+		HostLabel:    os.Getenv("HOST_LABEL"),
+		StartOnLogin: true,
 	}
-	if v := strings.TrimSpace(os.Getenv("AUTO_START")); v != "" {
-		cfg.AutoStart = strings.EqualFold(v, "true") || v == "1"
+	if v := strings.TrimSpace(os.Getenv("START_ON_LOGIN")); v != "" {
+		cfg.StartOnLogin = strings.EqualFold(v, "true") || v == "1"
 	}
 	if cfg.HostLabel == "" || cfg.Token == "" || cfg.ChatID == "" {
 		path := filepath.Join(repoRoot(), ".env")
@@ -250,8 +250,8 @@ func loadSettings() daemonSettings {
 					if cfg.ChatID == "" { cfg.ChatID = value }
 				case "HOST_LABEL":
 					if cfg.HostLabel == "" { cfg.HostLabel = value }
-				case "AUTO_START":
-					if value != "" { cfg.AutoStart = strings.EqualFold(value, "true") || value == "1" }
+				case "START_ON_LOGIN":
+					if value != "" { cfg.StartOnLogin = strings.EqualFold(value, "true") || value == "1" }
 				}
 			}
 		}
@@ -264,7 +264,7 @@ func loadSettings() daemonSettings {
 
 func saveSettingsFile(cfg daemonSettings) error {
 	path := filepath.Join(repoRoot(), ".env")
-	content := fmt.Sprintf("TG_TOKEN=%s\nTG_CHAT_ID=%s\nHOST_LABEL=%s\nAUTO_START=%t\n", cfg.Token, cfg.ChatID, cfg.HostLabel, cfg.AutoStart)
+	content := fmt.Sprintf("TG_TOKEN=%s\nTG_CHAT_ID=%s\nHOST_LABEL=%s\nSTART_ON_LOGIN=%t\n", cfg.Token, cfg.ChatID, cfg.HostLabel, cfg.StartOnLogin)
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
@@ -484,22 +484,22 @@ func (s *appState) appendLog(msg string) {
 	s.logs.SetText(text)
 }
 
-func (s *appState) updateAutoStartButton() {
-	if s.autoStartBtn == nil {
+func (s *appState) updateLaunchOnLoginButton() {
+	if s.launchOnLoginBtn == nil {
 		return
 	}
-	if s.settings.AutoStart {
-		s.autoStartBtn.SetText("Auto-start: ON")
-		s.autoStartBtn.Importance = widget.SuccessImportance
+	if s.settings.StartOnLogin {
+		s.launchOnLoginBtn.SetText("Launch on login: ON")
+		s.launchOnLoginBtn.Importance = widget.SuccessImportance
 	} else {
-		s.autoStartBtn.SetText("Auto-start: OFF")
-		s.autoStartBtn.Importance = widget.DangerImportance
+		s.launchOnLoginBtn.SetText("Launch on login: OFF")
+		s.launchOnLoginBtn.Importance = widget.DangerImportance
 	}
-	s.autoStartBtn.Refresh()
+	s.launchOnLoginBtn.Refresh()
 }
 
 func (s *appState) toggleAutoStart() {
-	desired := !s.settings.AutoStart
+	desired := !s.settings.StartOnLogin
 	var err error
 	if desired {
 		err = installAppAutoStart()
@@ -507,19 +507,19 @@ func (s *appState) toggleAutoStart() {
 		err = uninstallAppAutoStart()
 	}
 	if err != nil {
-		s.appendLog("auto-start update failed: " + err.Error())
+		s.appendLog("launch setting update failed: " + err.Error())
 		return
 	}
-	s.settings.AutoStart = desired
+	s.settings.StartOnLogin = desired
 	if err := saveSettingsFile(s.settings); err != nil {
 		s.appendLog("save settings failed: " + err.Error())
 		return
 	}
-	s.updateAutoStartButton()
-	if s.settings.AutoStart {
-		s.appendLog("auto-start enabled")
+	s.updateLaunchOnLoginButton()
+	if s.settings.StartOnLogin {
+		s.appendLog("launch on login enabled")
 	} else {
-		s.appendLog("auto-start disabled")
+		s.appendLog("launch on login disabled")
 	}
 }
 
@@ -619,10 +619,10 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 	})
 	state.restartBtn.Importance = widget.WarningImportance
 	state.restartBtn.Resize(fyne.NewSize(120, 40))
-	state.autoStartBtn = widget.NewButton("Auto-start: ON", func() {
+	state.launchOnLoginBtn = widget.NewButton("Launch on login: ON", func() {
 		state.toggleAutoStart()
 	})
-	state.updateAutoStartButton()
+	state.updateLaunchOnLoginButton()
 	state.syncButtonState()
 
 	summary := widget.NewCard("Daemon overview", "",
@@ -641,7 +641,7 @@ func newStatusPanel(state *appState) fyne.CanvasObject {
 			),
 			state.status,
 			container.NewHBox(state.startBtn, state.stopBtn, state.restartBtn),
-			autoStartRow(state.autoStartBtn),
+			autoStartRow(state.launchOnLoginBtn),
 		),
 	)
 
@@ -785,7 +785,7 @@ func main() {
 	w.SetTitle("autoipo")
 	state := newAppState()
 	if err := ensureAppAutoStartState(state.settings); err != nil {
-		state.appendLog("auto-start sync failed: " + err.Error())
+		state.appendLog("launch-on-login sync failed: " + err.Error())
 	}
 	state.window = w
 	refreshUiState(state)

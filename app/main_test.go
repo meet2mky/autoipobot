@@ -7,16 +7,16 @@ import (
 	"testing"
 )
 
-func TestAppAutoStartPlistPathMatchesLaunchAgentLocation(t *testing.T) {
-	path := appAutoStartPlistPath()
-	if !strings.HasSuffix(path, filepath.Join("Library", "LaunchAgents", appAutoStartLabel()+".plist")) {
+func TestAppLaunchOnLoginPlistPathMatchesLaunchAgentLocation(t *testing.T) {
+	path := appLaunchOnLoginPlistPath()
+	if !strings.HasSuffix(path, filepath.Join("Library", "LaunchAgents", appLaunchOnLoginLabel()+".plist")) {
 		t.Fatalf("unexpected launch agent path: %s", path)
 	}
 }
 
 func TestAppLaunchAgentPlistIncludesStartupSettings(t *testing.T) {
 	plist := appLaunchAgentPlistContent("/tmp/autoipoapp")
-	if !strings.Contains(plist, appAutoStartLabel()) {
+	if !strings.Contains(plist, appLaunchOnLoginLabel()) {
 		t.Fatalf("plist missing launch agent label: %s", plist)
 	}
 	if !strings.Contains(plist, "RunAtLoad") || !strings.Contains(plist, "KeepAlive") {
