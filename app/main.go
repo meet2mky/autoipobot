@@ -296,11 +296,24 @@ func showMissingRequiredSettingsDialog(state *appState) {
 
 	tokenEntry := widget.NewPasswordEntry()
 	tokenEntry.SetText(state.settings.Token)
+	tokenEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("bot token is required")
+		}
+		return nil
+	}
 	chatEntry := widget.NewEntry()
 	chatEntry.SetText(state.settings.ChatID)
+	chatEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("chat ID is required")
+		}
+		return nil
+	}
 	hostEntry := widget.NewEntry()
 	hostEntry.SetText(state.settings.HostLabel)
 	hostEntry.SetPlaceHolder("MyMac")
+	hostEntry.Validator = func(string) error { return nil }
 
 	dialog.ShowForm("Required before startup",
 		"Save & start",
@@ -747,10 +760,22 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 	state.tokenEntry = widget.NewPasswordEntry()
 	state.tokenEntry.SetText(state.settings.Token)
 	state.tokenEntry.SetPlaceHolder("Telegram bot token")
+	state.tokenEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("bot token is required")
+		}
+		return nil
+	}
 
 	state.chatEntry = widget.NewEntry()
 	state.chatEntry.SetText(state.settings.ChatID)
 	state.chatEntry.SetPlaceHolder("123456789")
+	state.chatEntry.Validator = func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return fmt.Errorf("chat ID is required")
+		}
+		return nil
+	}
 
 	form := &widget.Form{
 		Items: []*widget.FormItem{
