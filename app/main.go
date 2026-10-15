@@ -268,6 +268,74 @@ func saveSettingsFile(cfg daemonSettings) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
+func missingRequiredSettings(cfg daemonSettings) []string {
+	var missing []string
+	if strings.TrimSpace(cfg.Token) == "" {
+		missing = append(missing, "TG_TOKEN")
+	}
+	if strings.TrimSpace(cfg.ChatID) == "" {
+		missing = append(missing, "TG_CHAT_ID")
+	}
+	if strings.TrimSpace(cfg.HostLabel) == "" {
+		missing = append(missing, "HOST_LABEL")
+	}
+	return missing
+}
+
+func showMissingRequiredSettingsDialog(state *appState) {
+	if state == nil || state.window == nil {
+		return
+	}
+	missing := missingRequiredSettings(state.settings)
+	if len(missing) == 0 {
+		return
+	}
+	if state.settings.HostLabel == "" {
+		state.settings.HostLabel = "MyMac"
+	}
+
+	tokenEntry := widget.NewPasswordEntry()
+	tokenEntry.SetText(state.settings.Token)
+	chatEntry := widget.NewEntry()
+	chatEntry.SetText(state.settings.ChatID)
+	hostEntry := widget.NewEntry()
+	hostEntry.SetText(state.settings.HostLabel)
+	hostEntry.SetPlaceHolder("MyMac")
+
+	dialog.ShowForm("Required before startup",
+		"Save & start",
+		"Exit",
+		[]*widget.FormItem{
+			{Text: "Bot token", Widget: tokenEntry},
+			{Text: "Chat ID", Widget: chatEntry},
+			{Text: "Host label", Widget: hostEntry},
+		},
+		func(submit bool) {
+			if !submit {
+				state.window.Close()
+				return
+			}
+			state.settings.Token = strings.TrimSpace(tokenEntry.Text)
+			state.settings.ChatID = strings.TrimSpace(chatEntry.Text)
+			state.settings.HostLabel = strings.TrimSpace(hostEntry.Text)
+			if state.settings.HostLabel == "" {
+				state.settings.HostLabel = "MyMac"
+			}
+			if len(missingRequiredSettings(state.settings)) > 0 {
+				showMissingRequiredSettingsDialog(state)
+				return
+			}
+			if err := saveSettingsFile(state.settings); err != nil {
+				state.appendLog("save settings failed: " + err.Error())
+				return
+			}
+			state.setStatus("Ready")
+			refreshUiState(state)
+		},
+		state.window,
+	)
+}
+
 func logFilePath() string {
 	root := repoRoot()
 	return filepath.Join(root, "daemon", "logs", "autoipo.log")
@@ -570,6 +638,10 @@ func styledActionButton(label string, accent color.Color, importance widget.Impo
 
 func newStatusPanel(state *appState) fyne.CanvasObject {
 	state.startBtn = widget.NewButton("Start", func() {
+		if len(missingRequiredSettings(state.settings)) > 0 {
+			showMissingRequiredSettingsDialog(state)
+			return
+		}
 		if err := startDaemon(state.settings); err != nil {
 			state.appendLog(err.Error())
 			state.setStatus("Error")
@@ -687,9 +759,12 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 			{Text: "Chat ID", Widget: state.chatEntry},
 		},
 		OnSubmit: func() {
-			state.settings.HostLabel = state.labelEntry.Text
-			state.settings.Token = state.tokenEntry.Text
-			state.settings.ChatID = state.chatEntry.Text
+			state.settings.HostLabel = strings.TrimSpace(state.labelEntry.Text)
+			state.settings.Token = strings.TrimSpace(state.tokenEntry.Text)
+			state.settings.ChatID = strings.TrimSpace(state.chatEntry.Text)
+			if state.settings.HostLabel == "" {
+				state.settings.HostLabel = "MyMac"
+			}
 			if err := saveSettingsFile(state.settings); err != nil {
 				state.appendLog("save settings failed: " + err.Error())
 				return
@@ -697,9 +772,9 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 			state.appendLog("settings saved")
 		},
 		OnCancel: func() {
-			state.labelEntry.SetText(state.settings.HostLabel)
-			state.tokenEntry.SetText(state.settings.Token)
-			state.chatEntry.SetText(state.settings.ChatID)
+			state.labelEntry.SetText("")
+			state.tokenEntry.SetText("")
+			state.chatEntry.SetText("")
 		},
 	}
 
@@ -788,6 +863,9 @@ func main() {
 		state.appendLog("launch-on-login sync failed: " + err.Error())
 	}
 	state.window = w
+	if len(missingRequiredSettings(state.settings)) > 0 {
+		showMissingRequiredSettingsDialog(state)
+	}
 	refreshUiState(state)
 
 	statusPage := newStatusPanel(state)

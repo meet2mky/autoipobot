@@ -14,6 +14,15 @@ func TestAppLaunchOnLoginPlistPathMatchesLaunchAgentLocation(t *testing.T) {
 	}
 }
 
+func contains(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAppLaunchAgentPlistIncludesStartupSettings(t *testing.T) {
 	plist := appLaunchAgentPlistContent("/tmp/autoipoapp")
 	if !strings.Contains(plist, appLaunchOnLoginLabel()) {
@@ -24,6 +33,16 @@ func TestAppLaunchAgentPlistIncludesStartupSettings(t *testing.T) {
 	}
 	if !strings.Contains(plist, "/tmp/autoipoapp") {
 		t.Fatalf("plist missing executable path: %s", plist)
+	}
+}
+
+func TestMissingRequiredSettingsReportsEmptyTokenAndChatID(t *testing.T) {
+	missing := missingRequiredSettings(daemonSettings{HostLabel: "MyMac", Token: "", ChatID: ""})
+	if len(missing) != 2 {
+		t.Fatalf("expected 2 missing settings, got %d: %#v", len(missing), missing)
+	}
+	if !contains(missing, "TG_TOKEN") || !contains(missing, "TG_CHAT_ID") {
+		t.Fatalf("missing settings should include token and chat id: %#v", missing)
 	}
 }
 
