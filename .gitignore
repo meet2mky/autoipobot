@@ -5,6 +5,7 @@ app/tmp/
 *.log
 daemon/logs/
 .env
+.users
 deploy/com.autoipo.plist
 logs/
 .DS_Store

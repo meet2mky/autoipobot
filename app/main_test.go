@@ -46,6 +46,28 @@ func TestMissingRequiredSettingsReportsEmptyTokenAndChatID(t *testing.T) {
 	}
 }
 
+func TestUserStoreLoadsPanKeyedRecords(t *testing.T) {
+	data := []byte(`{"ABCDE1234F":{"name":"Alice","pan":"ABCDE1234F","email":"alice@example.com","phone":"9999999999"}}`)
+	store, err := decodeUserStore(data)
+	if err != nil {
+		t.Fatalf("decodeUserStore() unexpected error: %v", err)
+	}
+	if len(store) != 1 {
+		t.Fatalf("expected 1 user, got %d", len(store))
+	}
+	if _, ok := store["ABCDE1234F"]; !ok {
+		t.Fatalf("expected user keyed by PAN: %#v", store)
+	}
+}
+
+func TestLoadSettingsIncludesChromeHelperToggle(t *testing.T) {
+	t.Setenv("CHROME_HELPER_ENABLED", "true")
+	cfg := loadSettings()
+	if !cfg.ChromeHelperEnabled {
+		t.Fatal("expected CHROME_HELPER_ENABLED=true to enable Chrome helper settings")
+	}
+}
+
 func TestLogTailWindowDefaultsToLast100Lines(t *testing.T) {
 	lines := make([]string, 0, 150)
 	for i := 1; i <= 150; i++ {

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,30 +24,48 @@ import (
 )
 
 type daemonSettings struct {
-	Token        string
-	ChatID       string
-	HostLabel    string
-	StartOnLogin bool
+	Token               string
+	ChatID              string
+	HostLabel           string
+	StartOnLogin        bool
+	ChromeHelperEnabled bool
 }
 
+type userRecord struct {
+	Name     string `json:"name"`
+	PAN      string `json:"pan"`
+	BankName string `json:"bank_name"`
+	UserID   string `json:"user_id"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
+	Phone    string `json:"phone"`
+}
+
+type userStore map[string]userRecord
+
+var supportedBankOptions = []string{"HDFC", "Axis"}
+
 type appState struct {
-	status         *widget.Label
-	logs           *widget.Entry
-	repoRoot       string
-	settings       daemonSettings
-	labelEntry     *widget.Entry
-	tokenEntry     *widget.Entry
-	chatEntry      *widget.Entry
-	startBtn       *widget.Button
-	stopBtn        *widget.Button
-	restartBtn     *widget.Button
-	refreshLogsBtn *widget.Button
-	olderLogsBtn   *widget.Button
-	newerLogsBtn   *widget.Button
+	status          *widget.Label
+	logs            *widget.Entry
+	repoRoot        string
+	settings        daemonSettings
+	users           userStore
+	usersList       *fyne.Container
+	labelEntry      *widget.Entry
+	tokenEntry      *widget.Entry
+	chatEntry       *widget.Entry
+	chromeHelperToggle *widget.Check
+	startBtn        *widget.Button
+	stopBtn         *widget.Button
+	restartBtn      *widget.Button
+	refreshLogsBtn  *widget.Button
+	olderLogsBtn    *widget.Button
+	newerLogsBtn    *widget.Button
 	launchOnLoginBtn *widget.Button
-	window         fyne.Window
-	logViewStart   int
-	logPageSize    int
+	window          fyne.Window
+	logViewStart    int
+	logPageSize     int
 }
 
 type modernAppTheme struct{}
@@ -220,13 +240,17 @@ func ensureAppAutoStartState(cfg daemonSettings) error {
 
 func loadSettings() daemonSettings {
 	cfg := daemonSettings{
-		Token:        os.Getenv("TG_TOKEN"),
-		ChatID:       os.Getenv("TG_CHAT_ID"),
-		HostLabel:    os.Getenv("HOST_LABEL"),
-		StartOnLogin: true,
+		Token:               os.Getenv("TG_TOKEN"),
+		ChatID:              os.Getenv("TG_CHAT_ID"),
+		HostLabel:           os.Getenv("HOST_LABEL"),
+		StartOnLogin:        true,
+		ChromeHelperEnabled: false,
 	}
 	if v := strings.TrimSpace(os.Getenv("START_ON_LOGIN")); v != "" {
 		cfg.StartOnLogin = strings.EqualFold(v, "true") || v == "1"
+	}
+	if v := strings.TrimSpace(os.Getenv("CHROME_HELPER_ENABLED")); v != "" {
+		cfg.ChromeHelperEnabled = strings.EqualFold(v, "true") || v == "1"
 	}
 	if cfg.HostLabel == "" || cfg.Token == "" || cfg.ChatID == "" {
 		path := filepath.Join(repoRoot(), ".env")
@@ -252,6 +276,8 @@ func loadSettings() daemonSettings {
 					if cfg.HostLabel == "" { cfg.HostLabel = value }
 				case "START_ON_LOGIN":
 					if value != "" { cfg.StartOnLogin = strings.EqualFold(value, "true") || value == "1" }
+				case "CHROME_HELPER_ENABLED":
+					if value != "" { cfg.ChromeHelperEnabled = strings.EqualFold(value, "true") || value == "1" }
 				}
 			}
 		}
@@ -264,8 +290,63 @@ func loadSettings() daemonSettings {
 
 func saveSettingsFile(cfg daemonSettings) error {
 	path := filepath.Join(repoRoot(), ".env")
-	content := fmt.Sprintf("TG_TOKEN=%s\nTG_CHAT_ID=%s\nHOST_LABEL=%s\nSTART_ON_LOGIN=%t\n", cfg.Token, cfg.ChatID, cfg.HostLabel, cfg.StartOnLogin)
+	content := fmt.Sprintf("TG_TOKEN=%s\nTG_CHAT_ID=%s\nHOST_LABEL=%s\nSTART_ON_LOGIN=%t\nCHROME_HELPER_ENABLED=%t\n", cfg.Token, cfg.ChatID, cfg.HostLabel, cfg.StartOnLogin, cfg.ChromeHelperEnabled)
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+func userStorePath() string {
+	return filepath.Join(repoRoot(), ".users")
+}
+
+func decodeUserStore(data []byte) (userStore, error) {
+	if len(strings.TrimSpace(string(data))) == 0 {
+		return userStore{}, nil
+	}
+	var raw map[string]userRecord
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, err
+	}
+	cleaned := userStore{}
+	for pan, user := range raw {
+		key := strings.ToUpper(strings.TrimSpace(pan))
+		if key == "" {
+			continue
+		}
+		user.PAN = strings.ToUpper(strings.TrimSpace(user.PAN))
+		if user.PAN == "" {
+			user.PAN = key
+		}
+		cleaned[key] = user
+	}
+	return cleaned, nil
+}
+
+func loadUserStore() userStore {
+	path := userStorePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			_ = os.WriteFile(path, []byte("{}"), 0o600)
+			return userStore{}
+		}
+		return userStore{}
+	}
+	store, err := decodeUserStore(data)
+	if err != nil {
+		return userStore{}
+	}
+	return store
+}
+
+func saveUserStore(users userStore) error {
+	if users == nil {
+		users = userStore{}
+	}
+	data, err := json.MarshalIndent(users, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(userStorePath(), append(data, '\n'), 0o600)
 }
 
 func missingRequiredSettings(cfg daemonSettings) []string {
@@ -333,6 +414,15 @@ func showMissingRequiredSettingsDialog(state *appState) {
 			state.settings.HostLabel = strings.TrimSpace(hostEntry.Text)
 			if state.settings.HostLabel == "" {
 				state.settings.HostLabel = "MyMac"
+			}
+			if state.labelEntry != nil {
+				state.labelEntry.SetText(state.settings.HostLabel)
+			}
+			if state.tokenEntry != nil {
+				state.tokenEntry.SetText(state.settings.Token)
+			}
+			if state.chatEntry != nil {
+				state.chatEntry.SetText(state.settings.ChatID)
 			}
 			if len(missingRequiredSettings(state.settings)) > 0 {
 				showMissingRequiredSettingsDialog(state)
@@ -538,11 +628,12 @@ func refreshUiState(state *appState) {
 
 func newAppState() *appState {
 	state := &appState{
-		repoRoot:    repoRoot(),
-		settings:    loadSettings(),
-		status:      widget.NewLabel("Status: Ready"),
-		logs:        widget.NewMultiLineEntry(),
-		logPageSize: 100,
+		repoRoot:     repoRoot(),
+		settings:     loadSettings(),
+		users:        loadUserStore(),
+		status:       widget.NewLabel("Status: Ready"),
+		logs:         widget.NewMultiLineEntry(),
+		logPageSize:  100,
 		logViewStart: 0,
 	}
 	state.logs.SetText("")
@@ -777,16 +868,28 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 		return nil
 	}
 
+	state.chromeHelperToggle = widget.NewCheck("Enable Test Chrome Helper tab", func(checked bool) {
+		state.settings.ChromeHelperEnabled = checked
+		if err := saveSettingsFile(state.settings); err != nil {
+			state.appendLog("save settings failed: " + err.Error())
+			return
+		}
+		state.appendLog("chrome helper toggle saved")
+	})
+	state.chromeHelperToggle.Checked = state.settings.ChromeHelperEnabled
+
 	form := &widget.Form{
 		Items: []*widget.FormItem{
 			{Text: "Host label", Widget: state.labelEntry},
 			{Text: "Bot token", Widget: state.tokenEntry},
 			{Text: "Chat ID", Widget: state.chatEntry},
+			{Text: "Chrome helper", Widget: state.chromeHelperToggle},
 		},
 		OnSubmit: func() {
 			state.settings.HostLabel = strings.TrimSpace(state.labelEntry.Text)
 			state.settings.Token = strings.TrimSpace(state.tokenEntry.Text)
 			state.settings.ChatID = strings.TrimSpace(state.chatEntry.Text)
+			state.settings.ChromeHelperEnabled = state.chromeHelperToggle.Checked
 			if state.settings.HostLabel == "" {
 				state.settings.HostLabel = "MyMac"
 			}
@@ -810,13 +913,18 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 					state.setStatus("Error")
 					return
 				}
-				refreshUiState(state)
+				if err := relaunchCurrentApp(); err != nil {
+					state.appendLog("relaunch app after settings save failed: " + err.Error())
+					state.setStatus("Error")
+					return
+				}
 			}, state.window).Show()
 		},
 		OnCancel: func() {
 			state.labelEntry.SetText("")
 			state.tokenEntry.SetText("")
 			state.chatEntry.SetText("")
+			state.chromeHelperToggle.SetChecked(false)
 		},
 	}
 
@@ -826,6 +934,399 @@ func newSettingsPanel(state *appState) fyne.CanvasObject {
 	card := widget.NewCard("Daemon settings", "Configure the bot and host identity", form)
 	card.Subtitle = "Secure settings"
 	return container.NewPadded(card)
+}
+
+func refreshUserTiles(state *appState) {
+	if state == nil || state.usersList == nil {
+		return
+	}
+	state.usersList.Objects = nil
+	keys := make([]string, 0, len(state.users))
+	for pan := range state.users {
+		keys = append(keys, pan)
+	}
+	sort.Strings(keys)
+	for _, pan := range keys {
+		user := state.users[pan]
+		nameLabel := widget.NewLabel(user.Name)
+		nameLabel.TextStyle = fyne.TextStyle{Bold: true}
+		panLabel := widget.NewLabel("PAN: " + user.PAN)
+		bankLabel := widget.NewLabel("Bank: " + user.BankName)
+		userIDLabel := widget.NewLabel("User ID: " + user.UserID)
+		passwordLabel := widget.NewLabel("Password: " + maskPassword(user.Password))
+		emailLabel := widget.NewLabel(user.Email)
+		phoneLabel := widget.NewLabel(user.Phone)
+		editBtn := widget.NewButton("Edit", func(p string) func() {
+			return func() { showEditUserDialog(state, p) }
+		}(pan))
+		deleteBtn := widget.NewButton("Delete", func(p string) func() {
+			return func() {
+				dialog.NewConfirm("Delete user", "Remove this user from the local registry?", func(ok bool) {
+					if !ok {
+						return
+					}
+					delete(state.users, p)
+					if err := saveUserStore(state.users); err != nil {
+						state.appendLog("save users failed: " + err.Error())
+						return
+					}
+					refreshUserTiles(state)
+				}, state.window).Show()
+			}
+		}(pan))
+		card := widget.NewCard(user.Name, user.PAN, container.NewVBox(
+			nameLabel,
+			panLabel,
+			bankLabel,
+			userIDLabel,
+			passwordLabel,
+			emailLabel,
+			phoneLabel,
+			container.NewHBox(editBtn, deleteBtn),
+		))
+		state.usersList.Add(card)
+	}
+	state.usersList.Refresh()
+}
+
+func maskPassword(password string) string {
+	if strings.TrimSpace(password) == "" {
+		return "Not set"
+	}
+	return strings.Repeat("•", max(1, len(password)))
+}
+
+func normalizeBankName(value string) string {
+	trimmed := strings.TrimSpace(value)
+	for _, bank := range supportedBankOptions {
+		if strings.EqualFold(trimmed, bank) {
+			return bank
+		}
+	}
+	return ""
+}
+
+func showUserDialog(state *appState, existing userRecord, existingPAN string, title string, saveLabel string) {
+	nameEntry := widget.NewEntry()
+	panEntry := widget.NewEntry()
+	userIDEntry := widget.NewEntry()
+	passwordEntry := widget.NewPasswordEntry()
+	emailEntry := widget.NewEntry()
+	phoneEntry := widget.NewEntry()
+	bankSelect := widget.NewSelect(supportedBankOptions, func(string) {})
+	nameEntry.SetText(existing.Name)
+	panEntry.SetText(existing.PAN)
+	userIDEntry.SetText(existing.UserID)
+	passwordEntry.SetText(existing.Password)
+	emailEntry.SetText(existing.Email)
+	phoneEntry.SetText(existing.Phone)
+	if existing.BankName != "" {
+		bankSelect.SetSelected(existing.BankName)
+	} else if len(supportedBankOptions) > 0 {
+		bankSelect.SetSelected(supportedBankOptions[0])
+	}
+	panEntry.SetPlaceHolder("ABCDE1234F")
+	dialog.ShowForm(title,
+		saveLabel,
+		"Cancel",
+		[]*widget.FormItem{
+			{Text: "Name", Widget: nameEntry},
+			{Text: "PAN", Widget: panEntry},
+			{Text: "Bank name", Widget: bankSelect},
+			{Text: "User ID", Widget: userIDEntry},
+			{Text: "Password", Widget: passwordEntry},
+			{Text: "Email", Widget: emailEntry},
+			{Text: "Phone", Widget: phoneEntry},
+		},
+		func(submit bool) {
+			if !submit {
+				return
+			}
+			user := userRecord{
+				Name:     strings.TrimSpace(nameEntry.Text),
+				PAN:      strings.ToUpper(strings.TrimSpace(panEntry.Text)),
+				BankName: normalizeBankName(bankSelect.Selected),
+				UserID:   strings.TrimSpace(userIDEntry.Text),
+				Password: strings.TrimSpace(passwordEntry.Text),
+				Email:    strings.TrimSpace(emailEntry.Text),
+				Phone:    strings.TrimSpace(phoneEntry.Text),
+			}
+			if user.Name == "" || user.PAN == "" || user.BankName == "" || user.UserID == "" || user.Password == "" {
+				dialog.ShowError(fmt.Errorf("name, PAN, bank name, user ID, and password are required"), state.window)
+				return
+			}
+			if user.PAN != existingPAN {
+				if _, exists := state.users[user.PAN]; exists {
+					dialog.ShowError(fmt.Errorf("PAN %s already exists", user.PAN), state.window)
+					return
+				}
+			}
+			if existingPAN != "" {
+				delete(state.users, existingPAN)
+			}
+			state.users[user.PAN] = user
+			if err := saveUserStore(state.users); err != nil {
+				state.appendLog("save users failed: " + err.Error())
+				delete(state.users, user.PAN)
+				if existingPAN != "" {
+					state.users[existingPAN] = existing
+				}
+				return
+			}
+			refreshUserTiles(state)
+		},
+		state.window,
+	)
+}
+
+func showAddUserDialog(state *appState) {
+	showUserDialog(state, userRecord{}, "", "Add user", "Save user")
+}
+
+func showEditUserDialog(state *appState, pan string) {
+	if user, ok := state.users[pan]; ok {
+		showUserDialog(state, user, pan, "Edit user", "Update user")
+	}
+}
+
+func newUsersPanel(state *appState) fyne.CanvasObject {
+	state.usersList = container.NewGridWrap(fyne.NewSize(240, 180))
+	refreshUserTiles(state)
+	addUserBtn := widget.NewButton("Add user", func() {
+		showAddUserDialog(state)
+	})
+	addUserBtn.Importance = widget.HighImportance
+	header := container.NewBorder(nil, nil, nil, container.NewHBox(addUserBtn), widget.NewLabel("Users"))
+	return container.NewBorder(header, nil, nil, nil, container.NewScroll(state.usersList))
+}
+
+func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
+	urlEntry := widget.NewEntry()
+	urlEntry.SetText("https://now.hdfc.bank.in/retail-app/")
+	urlEntry.SetPlaceHolder("https://now.hdfc.bank.in/retail-app/")
+	userIDEntry := widget.NewEntry()
+	userIDEntry.SetText("demo-user")
+	userIDEntry.SetPlaceHolder("demo-user")
+	passwordEntry := widget.NewPasswordEntry()
+	passwordEntry.SetText("DemoPass123!")
+	passwordEntry.SetPlaceHolder("DemoPass123!")
+	selectorEntry := widget.NewEntry()
+	selectorEntry.SetText("#username")
+	selectorEntry.SetPlaceHolder("#username")
+	statusLabel := widget.NewLabel("Test chain status: idle")
+	statusLabel.Wrapping = fyne.TextWrapWord
+
+	type chainStep struct {
+		name    string
+		status  string
+		require []string
+	}
+	steps := []chainStep{
+		{name: "Open tab", status: "pending", require: []string{"url"}},
+		{name: "Confirm loaded", status: "pending", require: []string{"url"}},
+		{name: "Fill input", status: "pending", require: []string{"url", "user_id", "password"}},
+		{name: "Right click", status: "pending", require: []string{"url", "selector"}},
+	}
+
+	var helper *ChromeHelper
+	var currentStep = 0
+	var stopAt = 3
+
+	setStepStatus := func(index int, state string) {
+		steps[index].status = state
+	}
+
+	setStatusText := func(msg string) {
+		fyne.Do(func() {
+			statusLabel.SetText(msg)
+		})
+	}
+
+	getMissingRequirements := func(index int) []string {
+		var missing []string
+		for _, req := range steps[index].require {
+			switch req {
+			case "url":
+				if strings.TrimSpace(urlEntry.Text) == "" {
+					missing = append(missing, "Page URL")
+				}
+			case "user_id":
+				if strings.TrimSpace(userIDEntry.Text) == "" {
+					missing = append(missing, "User ID")
+				}
+			case "password":
+				if strings.TrimSpace(passwordEntry.Text) == "" {
+					missing = append(missing, "Password")
+				}
+			case "selector":
+				if strings.TrimSpace(selectorEntry.Text) == "" {
+					missing = append(missing, "Right-click selector")
+				}
+			}
+		}
+		return missing
+	}
+
+	buildStepCard := func(index int) fyne.CanvasObject {
+		step := steps[index]
+		bg := canvas.NewRectangle(color.NRGBA{R: 32, G: 38, B: 48, A: 255})
+		switch step.status {
+		case "pass":
+			bg.FillColor = color.NRGBA{R: 22, G: 101, B: 52, A: 255}
+		case "fail":
+			bg.FillColor = color.NRGBA{R: 120, G: 28, B: 28, A: 255}
+		case "waiting":
+			bg.FillColor = color.NRGBA{R: 104, G: 80, B: 18, A: 255}
+		}
+		label := widget.NewLabel(step.name)
+		label.TextStyle = fyne.TextStyle{Bold: true}
+		status := widget.NewLabel(step.status)
+		if step.status == "pass" {
+			status.SetText("Passed")
+		}
+		if step.status == "fail" {
+			status.SetText("Failed")
+		}
+		if step.status == "waiting" {
+			status.SetText("Waiting for input")
+		}
+		if step.status == "pending" {
+			status.SetText("Pending")
+		}
+		details := widget.NewLabel("")
+		if len(getMissingRequirements(index)) > 0 && step.status != "pass" && step.status != "fail" {
+			details.SetText("Missing: " + strings.Join(getMissingRequirements(index), ", "))
+		}
+		card := container.New(layout.NewGridLayoutWithColumns(2),
+			container.NewPadded(container.NewVBox(label, details)),
+			container.NewPadded(status),
+		)
+		return container.NewBorder(nil, nil, nil, nil, container.NewStack(bg, card))
+	}
+
+	statusPanel := container.NewVBox()
+
+	renderChain := func() {
+		fyne.Do(func() {
+			items := make([]fyne.CanvasObject, 0, len(steps))
+			for i := range steps {
+				items = append(items, buildStepCard(i))
+			}
+			statusPanel.Objects = items
+			statusPanel.Refresh()
+		})
+	}
+
+	renderChain()
+
+	runStep := func(index int) error {
+		if helper == nil {
+			newHelper, err := NewChromeHelper()
+			if err != nil {
+				return err
+			}
+			helper = newHelper
+		}
+		switch index {
+		case 0:
+			return helper.OpenTab(normalizeChromeURL(urlEntry.Text))
+		case 1:
+			return helper.ConfirmLoaded(20 * time.Second)
+		case 2:
+			return helper.FillKnownCredentials("hdfc", userIDEntry.Text, passwordEntry.Text)
+		case 3:
+			return helper.RightClick(selectorEntry.Text)
+		default:
+			return nil
+		}
+	}
+
+	continueBtn := widget.NewButton("Continue", func() {
+		for currentStep <= stopAt {
+			if currentStep >= len(steps) {
+				setStatusText("Test chain completed")
+				return
+			}
+			missing := getMissingRequirements(currentStep)
+			if len(missing) > 0 {
+				setStepStatus(currentStep, "waiting")
+				setStatusText("Step waiting for input: " + strings.Join(missing, ", "))
+				renderChain()
+				return
+			}
+			setStepStatus(currentStep, "running")
+			renderChain()
+			if err := runStep(currentStep); err != nil {
+				setStepStatus(currentStep, "fail")
+				setStatusText("Step failed: " + err.Error())
+				renderChain()
+				return
+			}
+			setStepStatus(currentStep, "pass")
+			setStatusText("Step passed: " + steps[currentStep].name)
+			currentStep++
+			if currentStep > stopAt {
+				setStatusText("Selected chain completed successfully")
+				break
+			}
+			continue
+		}
+		renderChain()
+	})
+	continueBtn.Importance = widget.HighImportance
+
+	resetBtn := widget.NewButton("Reset chain", func() {
+		for i := range steps {
+			steps[i].status = "pending"
+		}
+		currentStep = 0
+		if helper != nil {
+			helper.Close()
+			helper = nil
+		}
+		setStatusText("Test chain reset")
+		renderChain()
+	})
+
+	stopSelect := widget.NewSelect([]string{"Open tab", "Confirm loaded", "Fill input", "Right click"}, func(value string) {
+		switch value {
+		case "Open tab":
+			stopAt = 0
+		case "Confirm loaded":
+			stopAt = 1
+		case "Fill input":
+			stopAt = 2
+		case "Right click":
+			stopAt = 3
+		}
+	})
+	stopSelect.SetSelected("Right click")
+
+	fields := &widget.Form{
+		Items: []*widget.FormItem{
+			{Text: "Page URL", Widget: urlEntry},
+			{Text: "User ID", Widget: userIDEntry},
+			{Text: "Password", Widget: passwordEntry},
+			{Text: "Right-click selector", Widget: selectorEntry},
+		},
+	}
+
+	controls := container.NewGridWithColumns(2, continueBtn, resetBtn)
+	content := container.NewBorder(
+		nil,
+		nil,
+		nil,
+		nil,
+		container.NewVBox(
+			widget.NewLabel("Linear browser test chain"),
+			container.NewHBox(widget.NewLabel("Stop after:"), stopSelect),
+			fields,
+			controls,
+			statusLabel,
+			statusPanel,
+		),
+	)
+	return container.NewPadded(content)
 }
 
 func newLogsPanel(state *appState) fyne.CanvasObject {
@@ -912,7 +1413,12 @@ func main() {
 
 	statusPage := newStatusPanel(state)
 	settingsPage := newSettingsPanel(state)
+	usersPage := newUsersPanel(state)
 	logsPage := newLogsPanel(state)
+	var testChromePage fyne.CanvasObject
+	if state.settings.ChromeHelperEnabled {
+		testChromePage = newTestChromeHelperPanel(state)
+	}
 
 	go func() {
 		for range time.Tick(3 * time.Second) {
@@ -923,13 +1429,21 @@ func main() {
 	head := brandHeader("autoipo")
 	statusPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(statusPage))
 	settingsPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(settingsPage))
+	usersPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(usersPage))
 	logsPage = container.NewBorder(head, nil, nil, nil, container.NewPadded(logsPage))
+	if testChromePage != nil {
+		testChromePage = container.NewBorder(head, nil, nil, nil, container.NewPadded(testChromePage))
+	}
 
 	tabs := container.NewAppTabs(
 		container.NewTabItem("Status", statusPage),
 		container.NewTabItem("Settings", settingsPage),
-		container.NewTabItem("Logs", logsPage),
+		container.NewTabItem("Users", usersPage),
 	)
+	if testChromePage != nil {
+		tabs.Append(container.NewTabItem("Test Chrome Helper", testChromePage))
+	}
+	tabs.Append(container.NewTabItem("Logs", logsPage))
 	tabs.SetTabLocation(container.TabLocationLeading)
 	tabs.SetTabLocation(container.TabLocationLeading)
 	w.SetContent(tabs)
