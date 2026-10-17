@@ -1115,6 +1115,11 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 	selectorEntry.SetPlaceHolder("#username")
 	statusLabel := widget.NewLabel("Test chain status: idle")
 	statusLabel.Wrapping = fyne.TextWrapWord
+	statusError := widget.NewEntry()
+	statusError.MultiLine = true
+	statusError.SetReadOnly(true)
+	statusError.SetPlaceHolder("No helper error yet")
+	statusError.Wrapping = fyne.TextWrapWord
 
 	type chainStep struct {
 		name    string
@@ -1139,6 +1144,11 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 	setStatusText := func(msg string) {
 		fyne.Do(func() {
 			statusLabel.SetText(msg)
+			if strings.HasPrefix(msg, "Step failed: ") {
+				statusError.SetText(strings.TrimPrefix(msg, "Step failed: "))
+				return
+			}
+			statusError.SetText("")
 		})
 	}
 
@@ -1323,6 +1333,7 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 			fields,
 			controls,
 			statusLabel,
+			statusError,
 			statusPanel,
 		),
 	)

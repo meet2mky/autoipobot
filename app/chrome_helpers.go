@@ -9,11 +9,32 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/chromedp"
 )
+
+type copyableError struct {
+	msg string
+}
+
+func newCopyableError(msg string) error {
+	return copyableError{msg: msg}
+}
+
+func (e copyableError) Error() string {
+	return e.msg
+}
+
+func (e copyableError) String() string {
+	return e.msg
+}
+
+func (e copyableError) Copy() string {
+	return e.msg
+}
 
 type chromeProfileSettings struct {
 	userDataDir string
@@ -23,11 +44,11 @@ type chromeProfileSettings struct {
 func chromeProfileConfig() chromeProfileSettings {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return chromeProfileSettings{userDataDir: "/Users/mohityadav/Library/Application Support/Google/Chrome", profileDir: "AutoIPO"}
+		return chromeProfileSettings{userDataDir: "/Users/mohityadav/Library/Application Support/Google/Chrome", profileDir: "Default"}
 	}
 	return chromeProfileSettings{
 		userDataDir: filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
-		profileDir:  "AutoIPO",
+		profileDir:  "Default",
 	}
 }
 
@@ -48,24 +69,27 @@ func chromeExecAllocatorOptions() []chromedp.ExecAllocatorOption {
 
 // ChromeHelper gives practical browser automation helpers for common workflows.
 type ChromeHelper struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	timeout time.Duration
+	ctx      context.Context
+	cancel   context.CancelFunc
+	timeout  time.Duration
+	closeMux sync.Once
 }
 
 func NewChromeHelper() (*ChromeHelper, error) {
-	baseCtx, cancel := context.WithCancel(context.Background())
+	baseCtx, baseCancel := context.WithCancel(context.Background())
 	allocCtx, allocCancel := chromedp.NewExecAllocator(baseCtx, chromeExecAllocatorOptions()...)
 	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
 
 	h := &ChromeHelper{
 		ctx:     chromeCtx,
 		timeout: 30 * time.Second,
-		cancel: func() {
+	}
+	h.cancel = func() {
+		h.closeMux.Do(func() {
 			chromeCancel()
 			allocCancel()
-			cancel()
-		},
+			baseCancel()
+		})
 	}
 	return h, nil
 }
@@ -114,15 +138,17 @@ func detectLoginSelectors(siteHint string) map[string]string {
 func OpenChromeTab(url string) error {
 	normalized := normalizeChromeURL(url)
 	if normalized == "" {
-		return fmt.Errorf("a URL is required to open a Chrome tab")
+		return newCopyableError("a URL is required to open a Chrome tab")
 	}
 
 	switch runtime.GOOS {
 	case "darwin":
 		cfg := chromeProfileConfig()
-		profileDir := filepath.Join(cfg.userDataDir, cfg.profileDir)
-		if err := os.MkdirAll(profileDir, 0o755); err != nil {
-			return fmt.Errorf("create Chrome profile directory: %w", err)
+		if cfg.profileDir != "Default" {
+			profileDir := filepath.Join(cfg.userDataDir, cfg.profileDir)
+			if err := os.MkdirAll(profileDir, 0o755); err != nil {
+				return newCopyableError(fmt.Sprintf("create Chrome profile directory: %v", err))
+			}
 		}
 		cmd := exec.Command(
 			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -130,24 +156,39 @@ func OpenChromeTab(url string) error {
 			"--profile-directory="+cfg.profileDir,
 			normalized,
 		)
-		return cmd.Start()
+		if err := cmd.Start(); err != nil {
+			return newCopyableError(fmt.Sprintf("start Chrome: %v", err))
+		}
+		return nil
 	case "windows":
-		return exec.Command("cmd", "/C", "start", "", normalized).Run()
+		if err := exec.Command("cmd", "/C", "start", "", normalized).Run(); err != nil {
+			return newCopyableError(fmt.Sprintf("open Chrome tab: %v", err))
+		}
+		return nil
 	default:
 		for _, browser := range []string{"google-chrome", "chromium", "chromium-browser"} {
 			if _, err := exec.LookPath(browser); err == nil {
-				return exec.Command(browser, normalized).Run()
+				if err := exec.Command(browser, normalized).Run(); err != nil {
+					return newCopyableError(fmt.Sprintf("open tab with %s: %v", browser, err))
+				}
+				return nil
 			}
 		}
-		return exec.Command("xdg-open", normalized).Run()
+		if err := exec.Command("xdg-open", normalized).Run(); err != nil {
+			return newCopyableError(fmt.Sprintf("open browser: %v", err))
+		}
+		return nil
 	}
 }
 
 func (h *ChromeHelper) OpenTab(url string) error {
 	if h == nil {
-		return fmt.Errorf("chrome helper is nil")
+		return newCopyableError("chrome helper is nil")
 	}
-	return chromedp.Run(h.ctx, chromedp.Navigate(normalizeChromeURL(url)))
+	if err := chromedp.Run(h.ctx, chromedp.Navigate(normalizeChromeURL(url))); err != nil {
+		return newCopyableError(fmt.Sprintf("open tab: %v", err))
+	}
+	return nil
 }
 
 func detectBlockedAccessReason(title, body string) string {
@@ -163,7 +204,7 @@ func detectBlockedAccessReason(title, body string) string {
 
 func (h *ChromeHelper) ConfirmLoaded(timeout time.Duration) error {
 	if h == nil {
-		return fmt.Errorf("chrome helper is nil")
+		return newCopyableError("chrome helper is nil")
 	}
 	if timeout <= 0 {
 		timeout = h.timeout
@@ -179,19 +220,19 @@ func (h *ChromeHelper) ConfirmLoaded(timeout time.Duration) error {
 				chromedp.Evaluate(`document.body ? document.body.innerText || '' : ''`, &body),
 			); err == nil {
 				if reason := detectBlockedAccessReason(title, body); reason != "" {
-					return fmt.Errorf("page load reached an anti-bot page: %s", reason)
+					return newCopyableError(fmt.Sprintf("page load reached an anti-bot page: %s", reason))
 				}
 			}
 			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return fmt.Errorf("page did not finish loading within %s", timeout)
+	return newCopyableError(fmt.Sprintf("page did not finish loading within %s", timeout))
 }
 
 func (h *ChromeHelper) FillKnownCredentials(siteHint, userID, password string) error {
 	if h == nil {
-		return fmt.Errorf("chrome helper is nil")
+		return newCopyableError("chrome helper is nil")
 	}
 	selectors := detectLoginSelectors(siteHint)
 	if userID != "" {
@@ -199,7 +240,7 @@ func (h *ChromeHelper) FillKnownCredentials(siteHint, userID, password string) e
 			chromedp.WaitVisible(selectors["userID"], chromedp.ByQuery),
 			chromedp.SetValue(selectors["userID"], userID, chromedp.ByQuery),
 		); err != nil {
-			return fmt.Errorf("fill user id: %w", err)
+			return newCopyableError(fmt.Sprintf("fill user id: %v", err))
 		}
 	}
 	if password != "" {
@@ -207,7 +248,7 @@ func (h *ChromeHelper) FillKnownCredentials(siteHint, userID, password string) e
 			chromedp.WaitVisible(selectors["password"], chromedp.ByQuery),
 			chromedp.SetValue(selectors["password"], password, chromedp.ByQuery),
 		); err != nil {
-			return fmt.Errorf("fill password: %w", err)
+			return newCopyableError(fmt.Sprintf("fill password: %v", err))
 		}
 	}
 	return nil
@@ -215,12 +256,12 @@ func (h *ChromeHelper) FillKnownCredentials(siteHint, userID, password string) e
 
 func (h *ChromeHelper) RightClick(selector string) error {
 	if h == nil {
-		return fmt.Errorf("chrome helper is nil")
+		return newCopyableError("chrome helper is nil")
 	}
 	if selector == "" {
-		return fmt.Errorf("selector is required")
+		return newCopyableError("selector is required")
 	}
-	return chromedp.Run(h.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
+	if err := chromedp.Run(h.ctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		var nodes []*cdp.Node
 		if err := chromedp.Nodes(selector, &nodes, chromedp.ByQuery).Do(ctx); err != nil {
 			return err
@@ -229,5 +270,8 @@ func (h *ChromeHelper) RightClick(selector string) error {
 			return fmt.Errorf("selector %q did not match any element", selector)
 		}
 		return chromedp.MouseClickNode(nodes[0], chromedp.ButtonRight).Do(ctx)
-	}))
+	})); err != nil {
+		return newCopyableError(fmt.Sprintf("right click selector %q: %v", selector, err))
+	}
+	return nil
 }

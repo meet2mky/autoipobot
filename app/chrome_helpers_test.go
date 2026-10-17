@@ -46,7 +46,7 @@ func TestDetectBlockedAccessReason(t *testing.T) {
 	})
 }
 
-func TestChromeProfileConfigUsesDedicatedAutoIPOProfile(t *testing.T) {
+func TestChromeProfileConfigUsesDefaultChromeProfile(t *testing.T) {
 	config := chromeProfileConfig()
 	if config.userDataDir == "" {
 		t.Fatal("expected a Chrome user-data-dir to be configured")
@@ -54,7 +54,23 @@ func TestChromeProfileConfigUsesDedicatedAutoIPOProfile(t *testing.T) {
 	if !strings.Contains(config.userDataDir, "/Google/Chrome") {
 		t.Fatalf("expected Google Chrome user-data-dir, got %q", config.userDataDir)
 	}
-	if config.profileDir != "AutoIPO" {
-		t.Fatalf("expected AutoIPO profile directory, got %q", config.profileDir)
+	if config.profileDir != "Default" {
+		t.Fatalf("expected Default profile directory, got %q", config.profileDir)
 	}
+}
+
+func TestChromeHelperCloseIsIdempotent(t *testing.T) {
+	helper, err := NewChromeHelper()
+	if err != nil {
+		t.Fatalf("NewChromeHelper() returned error: %v", err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Close() panicked on second call: %v", r)
+		}
+	}()
+
+	helper.Close()
+	helper.Close()
 }
