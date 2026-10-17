@@ -52,6 +52,22 @@ func chromeProfileConfig() chromeProfileSettings {
 	}
 }
 
+func cleanupChromeSingletonLock(cfg chromeProfileSettings) error {
+	if cfg.userDataDir == "" || cfg.profileDir == "" {
+		return nil
+	}
+	lockPath := filepath.Join(cfg.userDataDir, cfg.profileDir, "SingletonLock")
+	if _, err := os.Stat(lockPath); err == nil {
+		if err := os.Remove(lockPath); err != nil {
+			return fmt.Errorf("remove stale Chrome singleton lock %q: %w", lockPath, err)
+		}
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("check Chrome singleton lock %q: %w", lockPath, err)
+	}
+	return nil
+}
+
 func chromeExecAllocatorOptions() []chromedp.ExecAllocatorOption {
 	opts := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
 	if runtime.GOOS == "darwin" {
@@ -76,6 +92,10 @@ type ChromeHelper struct {
 }
 
 func NewChromeHelper() (*ChromeHelper, error) {
+	cfg := chromeProfileConfig()
+	if err := cleanupChromeSingletonLock(cfg); err != nil {
+		return nil, newCopyableError(fmt.Sprintf("prepare Chrome profile: %v", err))
+	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
 	allocCtx, allocCancel := chromedp.NewExecAllocator(baseCtx, chromeExecAllocatorOptions()...)
 	chromeCtx, chromeCancel := chromedp.NewContext(allocCtx)
@@ -144,6 +164,9 @@ func OpenChromeTab(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		cfg := chromeProfileConfig()
+		if err := cleanupChromeSingletonLock(cfg); err != nil {
+			return newCopyableError(fmt.Sprintf("reset Chrome profile lock: %v", err))
+		}
 		if cfg.profileDir != "Default" {
 			profileDir := filepath.Join(cfg.userDataDir, cfg.profileDir)
 			if err := os.MkdirAll(profileDir, 0o755); err != nil {

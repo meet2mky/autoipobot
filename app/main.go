@@ -1117,7 +1117,7 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 	statusLabel.Wrapping = fyne.TextWrapWord
 	statusError := widget.NewEntry()
 	statusError.MultiLine = true
-	statusError.SetReadOnly(true)
+	statusError.Disable()
 	statusError.SetPlaceHolder("No helper error yet")
 	statusError.Wrapping = fyne.TextWrapWord
 

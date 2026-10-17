@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,6 +58,26 @@ func TestChromeProfileConfigUsesDefaultChromeProfile(t *testing.T) {
 	}
 	if config.profileDir != "Default" {
 		t.Fatalf("expected Default profile directory, got %q", config.profileDir)
+	}
+}
+
+func TestCleanupChromeSingletonLockRemovesStaleLockFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	profileDir := filepath.Join(tmpDir, "Default")
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		t.Fatalf("create profile dir: %v", err)
+	}
+	lockPath := filepath.Join(profileDir, "SingletonLock")
+	if err := os.WriteFile(lockPath, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("create stale SingletonLock: %v", err)
+	}
+
+	cfg := chromeProfileSettings{userDataDir: tmpDir, profileDir: "Default"}
+	if err := cleanupChromeSingletonLock(cfg); err != nil {
+		t.Fatalf("cleanupChromeSingletonLock() returned error: %v", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("expected stale SingletonLock to be removed, stat err = %v", err)
 	}
 }
 
