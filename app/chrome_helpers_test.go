@@ -48,7 +48,7 @@ func TestDetectBlockedAccessReason(t *testing.T) {
 	})
 }
 
-func TestChromeProfileConfigUsesDefaultChromeProfile(t *testing.T) {
+func TestChromeProfileConfigUsesDedicatedAutomationProfile(t *testing.T) {
 	config := chromeProfileConfig()
 	if config.userDataDir == "" {
 		t.Fatal("expected a Chrome user-data-dir to be configured")
@@ -56,28 +56,36 @@ func TestChromeProfileConfigUsesDefaultChromeProfile(t *testing.T) {
 	if !strings.Contains(config.userDataDir, "/Google/Chrome") {
 		t.Fatalf("expected Google Chrome user-data-dir, got %q", config.userDataDir)
 	}
-	if config.profileDir != "Default" {
-		t.Fatalf("expected Default profile directory, got %q", config.profileDir)
+	if config.profileDir != "AutoIPOAutomation" {
+		t.Fatalf("expected dedicated automation profile directory, got %q", config.profileDir)
 	}
 }
 
-func TestCleanupChromeSingletonLockRemovesStaleLockFile(t *testing.T) {
+func TestResetChromeRuntimeRemovesStaleLockFiles(t *testing.T) {
 	tmpDir := t.TempDir()
-	profileDir := filepath.Join(tmpDir, "Default")
+	profileDir := filepath.Join(tmpDir, "AutoIPOAutomation")
 	if err := os.MkdirAll(profileDir, 0o755); err != nil {
 		t.Fatalf("create profile dir: %v", err)
 	}
-	lockPath := filepath.Join(profileDir, "SingletonLock")
-	if err := os.WriteFile(lockPath, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("create stale SingletonLock: %v", err)
+
+	rootLock := filepath.Join(tmpDir, "SingletonLock")
+	if err := os.WriteFile(rootLock, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("create stale root SingletonLock: %v", err)
+	}
+	profileLock := filepath.Join(profileDir, "SingletonLock")
+	if err := os.WriteFile(profileLock, []byte("stale"), 0o600); err != nil {
+		t.Fatalf("create stale profile SingletonLock: %v", err)
 	}
 
-	cfg := chromeProfileSettings{userDataDir: tmpDir, profileDir: "Default"}
-	if err := cleanupChromeSingletonLock(cfg); err != nil {
-		t.Fatalf("cleanupChromeSingletonLock() returned error: %v", err)
+	cfg := chromeProfileSettings{userDataDir: tmpDir, profileDir: "AutoIPOAutomation"}
+	if err := resetChromeRuntime(cfg); err != nil {
+		t.Fatalf("resetChromeRuntime() returned error: %v", err)
 	}
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("expected stale SingletonLock to be removed, stat err = %v", err)
+	if _, err := os.Stat(rootLock); !os.IsNotExist(err) {
+		t.Fatalf("expected stale root SingletonLock to be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(profileLock); !os.IsNotExist(err) {
+		t.Fatalf("expected stale profile SingletonLock to be removed, stat err = %v", err)
 	}
 }
 

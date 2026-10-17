@@ -42,28 +42,35 @@ type chromeProfileSettings struct {
 }
 
 func chromeProfileConfig() chromeProfileSettings {
+	automationProfile := "AutoIPOAutomation"
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return chromeProfileSettings{userDataDir: "/Users/mohityadav/Library/Application Support/Google/Chrome", profileDir: "Default"}
+		return chromeProfileSettings{userDataDir: "/Users/mohityadav/Library/Application Support/Google/Chrome", profileDir: automationProfile}
 	}
 	return chromeProfileSettings{
 		userDataDir: filepath.Join(home, "Library", "Application Support", "Google", "Chrome"),
-		profileDir:  "Default",
+		profileDir:  automationProfile,
 	}
 }
 
-func cleanupChromeSingletonLock(cfg chromeProfileSettings) error {
-	if cfg.userDataDir == "" || cfg.profileDir == "" {
+func resetChromeRuntime(cfg chromeProfileSettings) error {
+	if cfg.userDataDir == "" {
 		return nil
 	}
-	lockPath := filepath.Join(cfg.userDataDir, cfg.profileDir, "SingletonLock")
-	if _, err := os.Stat(lockPath); err == nil {
-		if err := os.Remove(lockPath); err != nil {
-			return fmt.Errorf("remove stale Chrome singleton lock %q: %w", lockPath, err)
+
+	lockPaths := []string{
+		filepath.Join(cfg.userDataDir, "SingletonLock"),
+		filepath.Join(cfg.userDataDir, cfg.profileDir, "SingletonLock"),
+		filepath.Join(cfg.userDataDir, "SingletonSocket"),
+	}
+	for _, lockPath := range lockPaths {
+		if _, err := os.Stat(lockPath); err == nil {
+			if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove Chrome singleton lock %q: %w", lockPath, err)
+			}
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("check Chrome singleton lock %q: %w", lockPath, err)
 		}
-		return nil
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("check Chrome singleton lock %q: %w", lockPath, err)
 	}
 	return nil
 }
@@ -93,7 +100,7 @@ type ChromeHelper struct {
 
 func NewChromeHelper() (*ChromeHelper, error) {
 	cfg := chromeProfileConfig()
-	if err := cleanupChromeSingletonLock(cfg); err != nil {
+	if err := os.MkdirAll(filepath.Join(cfg.userDataDir, cfg.profileDir), 0o755); err != nil {
 		return nil, newCopyableError(fmt.Sprintf("prepare Chrome profile: %v", err))
 	}
 	baseCtx, baseCancel := context.WithCancel(context.Background())
@@ -164,14 +171,9 @@ func OpenChromeTab(url string) error {
 	switch runtime.GOOS {
 	case "darwin":
 		cfg := chromeProfileConfig()
-		if err := cleanupChromeSingletonLock(cfg); err != nil {
-			return newCopyableError(fmt.Sprintf("reset Chrome profile lock: %v", err))
-		}
-		if cfg.profileDir != "Default" {
-			profileDir := filepath.Join(cfg.userDataDir, cfg.profileDir)
-			if err := os.MkdirAll(profileDir, 0o755); err != nil {
-				return newCopyableError(fmt.Sprintf("create Chrome profile directory: %v", err))
-			}
+		profileDir := filepath.Join(cfg.userDataDir, cfg.profileDir)
+		if err := os.MkdirAll(profileDir, 0o755); err != nil {
+			return newCopyableError(fmt.Sprintf("create Chrome profile directory: %v", err))
 		}
 		cmd := exec.Command(
 			"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",

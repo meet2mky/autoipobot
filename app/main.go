@@ -1127,6 +1127,7 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 		require []string
 	}
 	steps := []chainStep{
+		{name: "Open Chrome", status: "pending"},
 		{name: "Open tab", status: "pending", require: []string{"url"}},
 		{name: "Confirm loaded", status: "pending", require: []string{"url"}},
 		{name: "Fill input", status: "pending", require: []string{"url", "user_id", "password"}},
@@ -1135,7 +1136,7 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 
 	var helper *ChromeHelper
 	var currentStep = 0
-	var stopAt = 3
+	var stopAt = 4
 
 	setStepStatus := func(index int, state string) {
 		steps[index].status = state
@@ -1239,12 +1240,21 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 		}
 		switch index {
 		case 0:
-			return helper.OpenTab(normalizeChromeURL(urlEntry.Text))
+			if helper == nil {
+				newHelper, err := NewChromeHelper()
+				if err != nil {
+					return err
+				}
+				helper = newHelper
+			}
+			return nil
 		case 1:
-			return helper.ConfirmLoaded(20 * time.Second)
+			return helper.OpenTab(normalizeChromeURL(urlEntry.Text))
 		case 2:
-			return helper.FillKnownCredentials("hdfc", userIDEntry.Text, passwordEntry.Text)
+			return helper.ConfirmLoaded(20 * time.Second)
 		case 3:
+			return helper.FillKnownCredentials("hdfc", userIDEntry.Text, passwordEntry.Text)
+		case 4:
 			return helper.RightClick(selectorEntry.Text)
 		default:
 			return nil
@@ -1298,16 +1308,18 @@ func newTestChromeHelperPanel(state *appState) fyne.CanvasObject {
 		renderChain()
 	})
 
-	stopSelect := widget.NewSelect([]string{"Open tab", "Confirm loaded", "Fill input", "Right click"}, func(value string) {
+	stopSelect := widget.NewSelect([]string{"Open Chrome", "Open tab", "Confirm loaded", "Fill input", "Right click"}, func(value string) {
 		switch value {
-		case "Open tab":
+		case "Open Chrome":
 			stopAt = 0
-		case "Confirm loaded":
+		case "Open tab":
 			stopAt = 1
-		case "Fill input":
+		case "Confirm loaded":
 			stopAt = 2
-		case "Right click":
+		case "Fill input":
 			stopAt = 3
+		case "Right click":
+			stopAt = 4
 		}
 	})
 	stopSelect.SetSelected("Right click")
