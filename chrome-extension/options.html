@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AutoIPO Website Opener settings</title>
+    <link rel="stylesheet" href="options.css">
+    <script src="options.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Website to open</h1>
+      <p>Click the extension button to open this address in a new tab.</p>
+      <form id="settings-form">
+        <label for="website-url">Website URL</label>
+        <input id="website-url" name="website-url" type="url" placeholder="https://example.com/" required>
+        <button type="submit">Save</button>
+        <span id="save-status" role="status" aria-live="polite"></span>
+      </form>
+    </main>
+  </body>
+</html>

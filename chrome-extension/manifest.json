@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "AutoIPO Website Opener",
+  "description": "Open a website, inspect page controls, fill a selected field, and view extension activity.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "permissions": ["storage", "alarms", "activeTab", "scripting", "sidePanel", "debugger", "tabs"],
+  "host_permissions": ["http://127.0.0.1/*", "http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "Open AutoIPO side panel"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
+}

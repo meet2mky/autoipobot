@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Website opener</title>
+    <link rel="stylesheet" href="popup.css">
+    <script src="popup.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Website opener</h1>
+          <p id="bridge-status"><span class="status-dot"></span>Connecting to CLI…</p>
+        </div>
+      </header>
+
+      <form id="settings-form">
+        <label for="website-url">Website URL</label>
+        <input id="website-url" type="url" placeholder="https://example.com/" required>
+        <button class="secondary" type="submit">Save URL</button>
+        <span id="save-status" role="status" aria-live="polite"></span>
+      </form>
+
+      <button id="open-site" class="primary" type="button">Open website in new tab</button>
+
+      <section class="extension-tabs" aria-labelledby="extension-tabs-heading">
+        <h2 id="extension-tabs-heading">Extension tabs</h2>
+        <p class="help-text">Green is selected. Yellow tabs are available to switch to.</p>
+        <ol id="extension-tabs" aria-label="Tabs opened by the extension"></ol>
+      </section>
+
+      <section class="field-filler" aria-labelledby="fill-heading">
+        <h2 id="fill-heading">Fill a field in the target tab</h2>
+        <p class="help-text">Enter text to type into a normal input. For picklists, use the separate dropdown chooser below.</p>
+        <label for="field-selector">Field selector</label>
+        <input id="field-selector" type="text" placeholder='input[name="email"]' autocomplete="off" spellcheck="false" required>
+        <label for="field-value">Value</label>
+        <textarea id="field-value" rows="2" placeholder="Text to enter"></textarea>
+        <div class="field-actions">
+          <button id="fill-field" class="secondary" type="button">Fill text</button>
+          <button id="click-element" class="secondary" type="button">Click element</button>
+        </div>
+        <span id="fill-status" role="status" aria-live="polite"></span>
+      </section>
+
+      <section class="field-filler" aria-labelledby="dropdown-heading">
+        <h2 id="dropdown-heading">Choose from dropdown</h2>
+        <p class="help-text">Load the target field’s choices, select one here, then choose it on the page.</p>
+        <label for="dropdown-selector">Dropdown selector</label>
+        <input id="dropdown-selector" type="text" placeholder='input[name="user_id"]' autocomplete="off" spellcheck="false">
+        <div class="field-actions">
+          <button id="load-picklist" class="secondary" type="button">Load dropdown choices</button>
+          <button id="select-dropdown-choice" class="secondary" type="button">Select choice</button>
+          <button id="dismiss-dropdown" class="secondary" type="button">Dismiss dropdown</button>
+        </div>
+        <label for="field-options">Available choices</label>
+        <select id="field-options" aria-label="Available dropdown choices">
+          <option value="">Load choices from the target field</option>
+        </select>
+        <span id="picklist-status" role="status" aria-live="polite"></span>
+      </section>
+
+      <section class="page-scanner" aria-labelledby="scan-heading">
+        <div class="activity-heading">
+          <h2 id="scan-heading">Page elements</h2>
+          <button id="scan-page" class="text-button" type="button">Scan page</button>
+        </div>
+        <p class="help-text">For fillable elements, choose Use for text or Use for dropdown. Radio and checkbox choices have a Select action.</p>
+        <p id="scan-status" role="status" aria-live="polite"></p>
+        <ol id="page-elements"></ol>
+      </section>
+
+      <section class="activity" aria-labelledby="activity-heading">
+        <div class="activity-heading">
+          <h2 id="activity-heading">Recent activity</h2>
+          <button id="clear-logs" class="text-button" type="button">Clear</button>
+        </div>
+        <ol id="command-logs" aria-live="polite"></ol>
+      </section>
+    </main>
+  </body>
+</html>

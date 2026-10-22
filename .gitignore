@@ -1,0 +1,11 @@
+# Build and deploy binaries are generated in the repository's bin/ folder.
+/bin/
+app/tmp/
+app/bundled/
+*.log
+daemon/logs/
+.data/
+logs/
+.DS_Store
+**/.DS_Store
+.vscode/
