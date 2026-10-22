@@ -1,11 +1,19 @@
-# Build and deploy binaries are generated in the repository's bin/ folder.
+# Build outputs
 /bin/
-app/tmp/
 app/bundled/
-*.log
-daemon/logs/
+app/tmp/
+
+# Private runtime state: settings, users, flows, run logs, locks, PID, token
 .data/
+
+# Logs
+*.log
+*.log.[0-9]
+daemon/logs/
 logs/
+
+# OS / editor
 .DS_Store
 **/.DS_Store
 .vscode/
+.idea/

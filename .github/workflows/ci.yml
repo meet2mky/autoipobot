@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go (lint, vet, test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: gofmt
+        run: make fmt-check
+      - name: go vet (native packages + wasm type-check of the Fyne app)
+        run: make vet
+      - name: go test
+        run: make test-race
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Extension JavaScript syntax check
+        run: make extension-check
+      - name: Extension harness (headless Chrome)
+        run: make extension-test
+
+  macos-build:
+    name: macOS build (all binaries, app with embedded helpers)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: make build
+      - name: Smoke test binaries
+        run: |
+          ./bin/autoipo version
+          ./bin/chrome-extension-cli help

@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
+# Clean, repeatable macOS deploy: stop running autoipo processes, build the
+# daemon and extension bridge, embed them into the desktop app, configure the
+# Telegram settings if needed, then start the daemon and the app.
+#
+# Usage:
+#   ./deploy.sh                       # interactive first-run configuration if needed
+#   TG_TOKEN=… TG_CHAT_ID=… HOST_LABEL=… ./deploy.sh
+#   DRY_RUN=1 ./deploy.sh             # build only
+#   SKIP_VET=1 ./deploy.sh            # skip go vet
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -8,111 +17,134 @@ if [[ "$PLATFORM" != "Darwin" ]]; then
   exit 1
 fi
 
-LOCK_FILE="$REPO_ROOT/.data/deploy.lock"
-mkdir -p "$REPO_ROOT/.data"
+export PATH="/opt/homebrew/bin:/usr/local/go/bin:$PATH"
+if ! command -v go >/dev/null 2>&1; then
+  echo "go is not installed or not on PATH." >&2
+  exit 1
+fi
+
+DATA_DIR="$REPO_ROOT/.data"
+BIN_DIR="$REPO_ROOT/bin"
+LOG_DIR="$REPO_ROOT/daemon/logs"
+BUNDLE_DIR="$REPO_ROOT/app/bundled"
+LOCK_FILE="$DATA_DIR/deploy.lock"
+DAEMON_BIN="$BIN_DIR/autoipo"
+CLI_BIN="$BIN_DIR/chrome-extension-cli"
+APP_BIN="$BIN_DIR/autoipoapp"
+PID_FILE="$DATA_DIR/autoipo.pid"
+
+mkdir -p "$DATA_DIR" "$BIN_DIR" "$LOG_DIR"
+chmod 700 "$DATA_DIR"
+
 if ! (umask 077; set -o noclobber; printf '%s\n' "$$" > "$LOCK_FILE") 2>/dev/null; then
   echo "Another deploy.sh invocation is running (lock file exists: $LOCK_FILE)." >&2
   exit 1
 fi
-trap 'rm -f "$LOCK_FILE"' EXIT
+cleanup() {
+  rm -rf "$BUNDLE_DIR"
+  rm -f "$LOCK_FILE"
+}
+trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-BIN_DIR="$REPO_ROOT/bin"
-LOG_DIR="$REPO_ROOT/daemon/logs"
-DAEMON_BIN="$BIN_DIR/autoipo"
-CLI_BIN="$BIN_DIR/chrome-extension-cli"
-APP_BIN="$BIN_DIR/autoipoapp"
-LOG_PATH="$LOG_DIR/autoipo.log"
-BUNDLE_DIR="$REPO_ROOT/app/bundled"
-trap 'rm -rf "$BUNDLE_DIR"; rm -f "$LOCK_FILE"' EXIT
+# --- helpers -----------------------------------------------------------------
 
-if [[ -f "$REPO_ROOT/.data/env" ]]; then
-  while IFS='=' read -r key val || [[ -n "$key" ]]; do
-    key="$(echo "$key" | tr -d ' \r\n')"
-    val="$(echo "$val" | tr -d '\r\n')"
-    [[ "$key" =~ ^#.*$ || -z "$key" ]] && continue
-    if [[ -z "${!key:-}" ]]; then
-      export "$key=$val"
-    fi
-  done < "$REPO_ROOT/.data/env"
-fi
-
-if [[ -z "${TG_TOKEN:-}" ]]; then
-  printf 'Enter Telegram bot token: '
-  read -r -s TG_TOKEN
-  printf '\n'
-fi
-
-if [[ -z "${TG_CHAT_ID:-}" ]]; then
-  printf 'Enter Telegram chat ID: '
-  read -r -s TG_CHAT_ID
-  printf '\n'
-fi
-
-if [[ -z "${HOST_LABEL:-}" ]]; then
-  printf 'Enter host label: '
-  read -r HOST_LABEL
-  printf '\n'
-fi
-
-if [[ -z "${TG_TOKEN}" || -z "${TG_CHAT_ID}" || -z "${HOST_LABEL}" ]]; then
-  echo "Missing required deployment values." >&2
-  exit 1
-fi
-
-echo "Removing stale app state..."
-rm -f "$REPO_ROOT/deploy/com.autoipo.plist" "$REPO_ROOT/deploy/com.autoipo.plist.example"
-rmdir "$REPO_ROOT/deploy" 2>/dev/null || true
-
-stop_processes() {
-  local process_name="$1"
-  local attempt
-
-  pkill -TERM -x "$process_name" 2>/dev/null || true
-  for attempt in {1..50}; do
-    if ! pgrep -x "$process_name" >/dev/null 2>&1; then
-      return
-    fi
+# stop_by_pidfile sends SIGTERM to the PID recorded by the daemon and waits.
+stop_by_pidfile() {
+  [[ -f "$PID_FILE" ]] || return 1
+  local pid
+  pid="$(tr -d '[:space:]' < "$PID_FILE")"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  kill -TERM "$pid" 2>/dev/null || true
+  for _ in $(seq 1 100); do
+    kill -0 "$pid" 2>/dev/null || return 0
     sleep 0.1
   done
-
-  pkill -KILL -x "$process_name" 2>/dev/null || true
+  kill -KILL "$pid" 2>/dev/null || true
+  return 0
 }
 
-# Stop the running app and daemon before replacing their binaries.
+# stop_by_name falls back to the exact process name (older deployments).
+stop_by_name() {
+  local name="$1"
+  pkill -TERM -x "$name" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    pgrep -x "$name" >/dev/null 2>&1 || return 0
+    sleep 0.1
+  done
+  pkill -KILL -x "$name" 2>/dev/null || true
+}
+
+# --- stop --------------------------------------------------------------------
+
 echo "Stopping running autoipo processes..."
-stop_processes "autoipoapp"
-stop_processes "autoipo"
-stop_processes "autoipobot"
+stop_by_name "autoipoapp"
+stop_by_pidfile || stop_by_name "autoipo"
+stop_by_name "chrome-extension-cli"
 
-rm -f "$LOG_PATH"
-rm -rf "$REPO_ROOT/app/.tmp" 2>/dev/null || true
-rm -f "$REPO_ROOT/daemon/autoipo" "$REPO_ROOT/app/autoipoapp" "$REPO_ROOT/autoipoapp" "$REPO_ROOT/chrome-extension-cli/chrome-extension-cli" 2>/dev/null || true
+# --- build -------------------------------------------------------------------
+
+cd "$REPO_ROOT"
+if [[ "${SKIP_VET:-0}" != "1" ]]; then
+  echo "Vetting..."
+  go vet ./internal/... ./daemon/... ./chrome-extension-cli/... ./app/...
+fi
+
+VERSION="$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/dev/null || echo dev)"
+LDFLAGS="-s -w -X main.version=$VERSION"
+
+echo "Building daemon and extension bridge ($VERSION)..."
+go build -trimpath -ldflags "$LDFLAGS" -o "$DAEMON_BIN" ./daemon
+go build -trimpath -ldflags "$LDFLAGS" -o "$CLI_BIN" ./chrome-extension-cli
+
+echo "Embedding helpers into the desktop app..."
 rm -rf "$BUNDLE_DIR"
-
-mkdir -p "$BIN_DIR" "$LOG_DIR" "$BUNDLE_DIR"
-
-echo "Building daemon and extension CLI binaries..."
-(cd "$REPO_ROOT/daemon" && export PATH="/opt/homebrew/bin:$PATH" && go build -o "$DAEMON_BIN" .)
-(cd "$REPO_ROOT/chrome-extension-cli" && export PATH="/opt/homebrew/bin:$PATH" && go build -o "$CLI_BIN" .)
+mkdir -p "$BUNDLE_DIR"
 cp "$DAEMON_BIN" "$BUNDLE_DIR/autoipo"
 cp "$CLI_BIN" "$BUNDLE_DIR/chrome-extension-cli"
-chmod 755 "$BUNDLE_DIR/autoipo" "$BUNDLE_DIR/chrome-extension-cli"
-(cd "$REPO_ROOT/app" && export PATH="/opt/homebrew/bin:$PATH" && go build -o "$APP_BIN" .)
+chmod 755 "$BUNDLE_DIR"/*
+go build -trimpath -tags bundled -ldflags "$LDFLAGS" -o "$APP_BIN" ./app
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
-  echo "Dry run enabled; daemon and desktop app were built but not started."
+  echo "Dry run enabled; binaries were built but nothing was configured or started."
   exit 0
 fi
 
-echo "Starting autoipo..."
-cd "$REPO_ROOT/daemon"
-nohup env TG_TOKEN="$TG_TOKEN" TG_CHAT_ID="$TG_CHAT_ID" HOST_LABEL="$HOST_LABEL" "$DAEMON_BIN" >/dev/null 2>&1 </dev/null &
-DAEMON_PID=$!
-disown "$DAEMON_PID"
-cd "$REPO_ROOT"
+# --- configure ---------------------------------------------------------------
+
+# The daemon keeps the bot token in the macOS Keychain and chat ID / host
+# label in .data/env. Values passed in the environment are saved first; if
+# the configuration is still incomplete, ask interactively.
+if [[ -n "${TG_TOKEN:-}" || -n "${TG_CHAT_ID:-}" || -n "${HOST_LABEL:-}" ]]; then
+  echo "Saving Telegram settings from the environment..."
+  "$DAEMON_BIN" configure
+fi
+
+if ! "$DAEMON_BIN" check >/dev/null 2>&1; then
+  echo "Telegram settings are incomplete or invalid."
+  printf 'Enter Telegram bot token: '
+  read -r -s TG_TOKEN
+  printf '\n'
+  printf 'Enter Telegram chat ID: '
+  read -r TG_CHAT_ID
+  printf 'Enter host label [MyMac]: '
+  read -r HOST_LABEL
+  HOST_LABEL="${HOST_LABEL:-MyMac}"
+  export TG_TOKEN TG_CHAT_ID HOST_LABEL
+  "$DAEMON_BIN" configure
+  "$DAEMON_BIN" check
+fi
+unset TG_TOKEN
+
+# --- start -------------------------------------------------------------------
+
+echo "Starting autoipo daemon..."
+nohup "$DAEMON_BIN" >/dev/null 2>&1 </dev/null &
+disown $! 2>/dev/null || true
+
 echo "Launching desktop app..."
-"$APP_BIN" >/dev/null 2>&1 </dev/null &
-APP_PID=$!
-disown "$APP_PID"
-exit 0
+nohup "$APP_BIN" >/dev/null 2>&1 </dev/null &
+disown $! 2>/dev/null || true
+
+echo "Done. Logs: $LOG_DIR/autoipo.log"

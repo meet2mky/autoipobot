@@ -1,0 +1,1 @@
+../ext/page-scan.js

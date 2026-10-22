@@ -1,416 +1,386 @@
+// Command chrome-extension-cli runs the loopback bridge between local Go
+// programs and the AutoIPO Chrome extension ("serve") and is the command line
+// client for that bridge.
 package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
-	mathrand "math/rand"
-	"net"
-	"net/http"
-	"net/url"
+	"math/rand/v2"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
+
+	"autoipo/internal/bridge"
+	"autoipo/internal/paths"
 )
 
-const bridgePort = "18765"
+// Exit codes returned by run.
+const (
+	exitOK      = 0
+	exitFailure = 1
+	exitUsage   = 2
+)
 
-type command struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	URL      string `json:"url,omitempty"`
-	Selector string `json:"selector,omitempty"`
-	Value    string `json:"value,omitempty"`
-}
+const (
+	jsonFlag        = "--json"
+	maxSleepSeconds = 86400
+)
 
-type commandRequest struct {
-	Type     string `json:"type"`
-	URL      string `json:"url,omitempty"`
-	Selector string `json:"selector,omitempty"`
-	Value    string `json:"value,omitempty"`
-}
+const usageText = `Usage: chrome-extension-cli [--json] <command> [arguments]
 
-type commandAck struct {
-	ID       string             `json:"id"`
-	OK       bool               `json:"ok"`
-	Error    string             `json:"error,omitempty"`
-	Options  []string           `json:"options,omitempty"`
-	Elements []selectorMetadata `json:"elements,omitempty"`
-	Output   string             `json:"output,omitempty"`
-}
+Bridge:
+  serve                         Run the local bridge the Chrome extension connects to
+  status                        Show whether the bridge and the extension are up
 
-type selectorMetadata struct {
-	Kind        string `json:"kind"`
-	Label       string `json:"label,omitempty"`
-	Description string `json:"description"`
-	Context     string `json:"context,omitempty"`
-	Selector    string `json:"selector"`
-}
+Extension commands (need "serve" running and Chrome open with the extension):
+  set-url <url>                 Save the website URL the extension opens
+  open                          Open the saved URL in a new tab
+  click <selector>              Click the element matching a CSS selector
+  fill <selector> <value>       Type a value into the matching element
+  dropdown <selector>           List the choices of a dropdown or autocomplete field
+  choose <selector> <value>     Pick a choice by label or value
+  press-key <key>               Press a key (Escape, Enter, Tab, ArrowDown, ...)
+  read-text <selector>          Print the text of the matching element
+  list-selectors                List the visible clickable and fillable elements
+  page-contains <selector>      Print true or false
+  screenshot [--out <file>]     Save a PNG of the page and print its path
+                                (default: .data/screenshots/<YYYYMMDD-HHMMSS>.png)
 
-type commandResult struct {
-	OK       bool               `json:"ok"`
-	Error    string             `json:"error,omitempty"`
-	Options  []string           `json:"options,omitempty"`
-	Elements []selectorMetadata `json:"elements,omitempty"`
-	Output   string             `json:"output,omitempty"`
-}
+Local:
+  random-sleep <max-seconds>    Sleep for a random time up to max-seconds (<= 86400)
+  help                          Show this help
 
-type pendingCommand struct {
-	command command
-	result  chan commandResult
-}
+Options:
+  --json                        Print the raw bridge result (or status) as JSON;
+                                for screenshot the "output" field holds the saved path
 
-type bridge struct {
-	queue    chan *pendingCommand
-	mu       sync.Mutex
-	pending  map[string]*pendingCommand
-	clientMu sync.Mutex
-	client   *webSocketConn
-}
+Environment:
+  AUTOIPO_BRIDGE_PORT           Loopback port of the bridge (default 18765)
+  AUTOIPO_EXTENSION_ID          Only accept WebSocket connections from this extension ID
+  AUTOIPO_HOME                  Root directory holding .data (session token, screenshots)
+
+Exit codes: 0 success, 1 bridge or command failure, 2 usage error.`
+
+// newClient creates the bridge client used by the commands; tests replace it.
+var newClient = bridge.NewClient
+
+// screenshotDir returns the default directory for screenshots; tests replace it.
+var screenshotDir = func() string { return filepath.Join(paths.DataDir(), "screenshots") }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "chrome-extension-cli:", err)
-		os.Exit(1)
-	}
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
 
-func run(args []string) error {
+// run executes the CLI with args (without the program name) and returns the
+// process exit code.
+func run(args []string, stdout, stderr io.Writer) int {
+	args, asJSON := stripFlag(args, jsonFlag)
+	p := printer{stdout: stdout, stderr: stderr, asJSON: asJSON}
 	if len(args) == 0 {
-		return usage()
+		fmt.Fprintln(stderr, usageText)
+		return exitUsage
 	}
-
-	switch args[0] {
-	case "serve":
-		if len(args) != 1 {
-			return usage()
-		}
-		return serve()
-	case "set-url":
-		if len(args) != 2 {
-			return usage()
-		}
-		websiteURL, err := validateURL(args[1])
-		if err != nil {
-			return err
-		}
-		return sendCommand(commandRequest{Type: "set_url", URL: websiteURL})
-	case "open":
-		if len(args) != 1 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "open"})
-	case "click":
-		if len(args) != 2 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "click", Selector: args[1]})
-	case "fill":
-		if len(args) != 3 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "fill", Selector: args[1], Value: args[2]})
-	case "dropdown":
-		if len(args) != 2 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "dropdown", Selector: args[1]})
-	case "choose":
-		if len(args) != 3 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "choose", Selector: args[1], Value: args[2]})
-	case "list-selectors":
-		if len(args) != 1 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "list_selectors"})
-	case "page-contains":
-		if len(args) != 2 {
-			return usage()
-		}
-		return sendCommand(commandRequest{Type: "page_contains", Selector: args[1]})
-	case "random-sleep":
-		if len(args) != 2 {
-			return usage()
-		}
-		maxSeconds, err := strconv.ParseFloat(args[1], 64)
-		if err != nil || maxSeconds <= 0 || maxSeconds > 86400 {
-			return fmt.Errorf("sleep duration must be a number greater than 0 and no more than 86400 seconds")
-		}
-		duration := time.Duration(mathrand.Float64() * maxSeconds * float64(time.Second))
-		time.Sleep(duration)
-		fmt.Printf("Slept for %.2f seconds\n", duration.Seconds())
-		return nil
-	case "help", "-h", "--help":
-		fmt.Println(usageText)
-		return nil
-	default:
-		return fmt.Errorf("unknown command %q\n%s", args[0], usageText)
-	}
-}
-
-const usageText = `Usage:
-  chrome-extension-cli serve
-  chrome-extension-cli set-url <http-or-https-url>
-  chrome-extension-cli open
-  chrome-extension-cli click <css-selector>
-  chrome-extension-cli fill <css-selector> <value>
-  chrome-extension-cli dropdown <css-selector>
-  chrome-extension-cli choose <css-selector> <option-label-or-value>
-  chrome-extension-cli list-selectors
-  chrome-extension-cli page-contains <css-selector>
-  chrome-extension-cli random-sleep <max-seconds>
-
-Run "serve" continuously while using the extension.`
-
-func usage() error { return errors.New(usageText) }
-
-func serve() error {
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", bridgePort))
-	if err != nil {
-		return fmt.Errorf("listen on 127.0.0.1:%s: %w", bridgePort, err)
-	}
-
-	bridgeServer := &bridge{
-		queue:   make(chan *pendingCommand, 32),
-		pending: make(map[string]*pendingCommand),
-	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", bridgeServer.handleHealth)
-	mux.HandleFunc("/status", bridgeServer.handleStatus)
-	mux.HandleFunc("/command", bridgeServer.handleCommand)
-	mux.HandleFunc("/ws", bridgeServer.handleWebSocket)
-	server := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	log.Printf("extension bridge listening on 127.0.0.1:%s", bridgePort)
-	log.Printf("press Ctrl+C to stop")
-
-	serveErr := make(chan error, 1)
-	go func() { serveErr <- server.Serve(listener) }()
-	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	select {
-	case <-signalCtx.Done():
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return server.Shutdown(ctx)
-	case err := <-serveErr:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return err
+	name, rest := args[0], args[1:]
+	switch name {
+	case "help", "-h", "--help":
+		fmt.Fprintln(stdout, usageText)
+		return exitOK
+	case "serve":
+		if len(rest) != 0 {
+			return p.usageError(errors.New("serve takes no arguments"))
 		}
-		return nil
-	}
-}
-
-func (b *bridge) authorize(w http.ResponseWriter, r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin != "" {
-		parsed, err := url.Parse(origin)
-		if err != nil || parsed.Scheme != "chrome-extension" || parsed.Host == "" {
-			http.Error(w, "origin not allowed", http.StatusForbidden)
-			return false
+		return runServe(ctx, stderr)
+	case "status":
+		if len(rest) != 0 {
+			return p.usageError(errors.New("status takes no arguments"))
 		}
-	}
-	return true
-}
-
-func (b *bridge) handleHealth(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	origin := r.Header.Get("Origin")
-	if !b.authorize(w, r) {
-		log.Printf("rejected health-check origin %q", origin)
-		return
-	}
-	if origin != "" {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Vary", "Origin")
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (b *bridge) handleStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	b.clientMu.Lock()
-	connected := b.client != nil
-	b.clientMu.Unlock()
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(struct {
-		Serving            bool `json:"serving"`
-		ExtensionConnected bool `json:"extension_connected"`
-	}{Serving: true, ExtensionConnected: connected})
-}
-
-func (b *bridge) handleCommand(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !b.authorize(w, r) {
-		return
-	}
-	var request commandRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&request); err != nil {
-		http.Error(w, "invalid command JSON", http.StatusBadRequest)
-		return
-	}
-	if request.Type != "open" && request.Type != "set_url" && request.Type != "click" && request.Type != "fill" && request.Type != "dropdown" && request.Type != "choose" && request.Type != "list_selectors" && request.Type != "page_contains" {
-		http.Error(w, "unknown command type", http.StatusBadRequest)
-		return
-	}
-	if request.Type == "set_url" {
-		validated, err := validateURL(request.URL)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		request.URL = validated
-	}
-	if request.Type == "click" || request.Type == "fill" || request.Type == "dropdown" || request.Type == "choose" || request.Type == "page_contains" {
-		if strings.TrimSpace(request.Selector) == "" || len(request.Selector) > 2048 {
-			http.Error(w, "selector must contain 1 to 2048 characters", http.StatusBadRequest)
-			return
-		}
-	}
-
-	id, err := randomID()
-	if err != nil {
-		http.Error(w, "could not create command ID", http.StatusInternalServerError)
-		return
-	}
-	item := &pendingCommand{
-		command: command{ID: id, Type: request.Type, URL: request.URL, Selector: request.Selector, Value: request.Value},
-		result:  make(chan commandResult, 1),
-	}
-	b.mu.Lock()
-	b.pending[id] = item
-	b.mu.Unlock()
-	select {
-	case b.queue <- item:
-	case <-r.Context().Done():
-		b.removePending(id)
-		return
+		return runStatus(ctx, p)
+	case "random-sleep":
+		return runRandomSleep(ctx, rest, p)
+	case "screenshot":
+		return runScreenshot(ctx, rest, p)
 	default:
-		b.removePending(id)
-		http.Error(w, "extension command queue is full", http.StatusServiceUnavailable)
-		return
+		return runBridgeCommand(ctx, name, rest, p)
 	}
+}
 
-	timer := time.NewTimer(45 * time.Second)
+// stripFlag removes every occurrence of flag from args and reports whether it
+// was present.
+func stripFlag(args []string, flag string) ([]string, bool) {
+	kept := make([]string, 0, len(args))
+	found := false
+	for _, arg := range args {
+		if arg == flag {
+			found = true
+			continue
+		}
+		kept = append(kept, arg)
+	}
+	return kept, found
+}
+
+// printer renders command outcomes as human-readable text or as JSON.
+type printer struct {
+	stdout io.Writer
+	stderr io.Writer
+	asJSON bool
+}
+
+// success prints text, or result as JSON, and returns exitOK.
+func (p printer) success(result bridge.Result, text string) int {
+	if p.asJSON {
+		return p.json(result)
+	}
+	fmt.Fprintln(p.stdout, text)
+	return exitOK
+}
+
+// fail reports err on stderr and returns exitFailure. In JSON mode the failed
+// result (or one synthesized from err) is printed on stdout first so callers
+// always receive one JSON object.
+func (p printer) fail(result bridge.Result, err error) int {
+	if p.asJSON {
+		if result.Error == "" {
+			result = bridge.Result{OK: false, Error: err.Error()}
+		}
+		p.json(result)
+	}
+	var commandErr *bridge.CommandError
+	switch {
+	case errors.As(err, &commandErr):
+		fmt.Fprintf(p.stderr, "extension command failed: %v\n", commandErr)
+	case errors.Is(err, bridge.ErrUnreachable):
+		fmt.Fprintf(p.stderr, "chrome-extension-cli: %v\nStart the bridge first: chrome-extension-cli serve\n", err)
+	case errors.Is(err, context.Canceled):
+		fmt.Fprintln(p.stderr, "chrome-extension-cli: interrupted")
+	default:
+		fmt.Fprintf(p.stderr, "chrome-extension-cli: %v\n", err)
+	}
+	return exitFailure
+}
+
+// usageError reports a command line mistake and returns exitUsage.
+func (p printer) usageError(err error) int {
+	fmt.Fprintf(p.stderr, "chrome-extension-cli: %v\nRun \"chrome-extension-cli help\" for usage.\n", err)
+	return exitUsage
+}
+
+// json prints value as one JSON line on stdout.
+func (p printer) json(value any) int {
+	data, err := json.Marshal(value)
+	if err != nil {
+		fmt.Fprintf(p.stderr, "chrome-extension-cli: encode JSON: %v\n", err)
+		return exitFailure
+	}
+	fmt.Fprintln(p.stdout, string(data))
+	return exitOK
+}
+
+// Commands -------------------------------------------------------------------
+
+// runServe runs the bridge until ctx is cancelled (SIGINT/SIGTERM).
+func runServe(ctx context.Context, stderr io.Writer) int {
+	logger := log.New(stderr, "", log.LstdFlags)
+	token, err := bridge.EnsureToken()
+	if err != nil {
+		logger.Printf("create bridge session token: %v", err)
+		return exitFailure
+	}
+	cfg := defaultServerConfig()
+	cfg.token = token
+	cfg.extensionID = strings.TrimSpace(os.Getenv(envExtensionID))
+	cfg.logger = logger
+	server, err := newBridgeServer(cfg)
+	if err != nil {
+		logger.Printf("configure bridge: %v", err)
+		return exitFailure
+	}
+	listener, err := server.listen()
+	if err != nil {
+		logger.Printf("%v (is another bridge already running?)", err)
+		return exitFailure
+	}
+	logger.Printf("extension bridge listening on %s (protocol v%d)", listener.Addr(), bridge.ProtocolVersion)
+	logger.Printf("session token file: %s", paths.BridgeTokenFile())
+	if cfg.extensionID != "" {
+		logger.Printf("accepting only extension %s", cfg.extensionID)
+	}
+	logger.Printf("press Ctrl+C to stop")
+	if err := server.serve(ctx, listener); err != nil {
+		logger.Printf("%v", err)
+		return exitFailure
+	}
+	return exitOK
+}
+
+// runBridgeCommand sends one of the bridge.CLICommands to the extension.
+func runBridgeCommand(ctx context.Context, name string, args []string, p printer) int {
+	if _, known := bridge.CommandArgCount(name); !known {
+		return p.usageError(fmt.Errorf("unknown command %q", name))
+	}
+	request, err := bridge.BuildRequest(name, args)
+	if err != nil {
+		return p.usageError(err)
+	}
+	result, err := newClient().Send(ctx, request)
+	if err != nil {
+		return p.fail(result, err)
+	}
+	return p.success(result, bridge.FormatResult(request, result))
+}
+
+func runStatus(ctx context.Context, p printer) int {
+	client := newClient()
+	status, err := client.Status(ctx)
+	if err != nil {
+		return p.fail(bridge.Result{}, err)
+	}
+	if p.asJSON {
+		return p.json(status)
+	}
+	fmt.Fprintln(p.stdout, formatStatus(status, client.BaseURL))
+	return exitOK
+}
+
+// formatStatus renders a bridge.Status as a few human-readable lines.
+func formatStatus(status bridge.Status, baseURL string) string {
+	extension := "not connected"
+	if status.ExtensionConnected {
+		extension = "connected"
+		if status.ExtensionOrigin != "" {
+			extension += " (" + status.ExtensionOrigin + ")"
+		}
+	}
+	last := status.LastCommandAt
+	if last == "" {
+		last = "never"
+	}
+	uptime := time.Duration(status.UptimeSeconds) * time.Second
+	return strings.Join([]string{
+		fmt.Sprintf("bridge: serving at %s (protocol v%d, up %s)", baseURL, status.ProtocolVersion, uptime),
+		"extension: " + extension,
+		fmt.Sprintf("pending commands: %d", status.PendingCommands),
+		"last command: " + last,
+	}, "\n")
+}
+
+// runRandomSleep sleeps for a uniformly random duration in (0, max-seconds].
+func runRandomSleep(ctx context.Context, args []string, p printer) int {
+	if len(args) != 1 {
+		return p.usageError(errors.New("random-sleep expects 1 argument: <max-seconds>"))
+	}
+	maxSeconds, err := strconv.ParseFloat(args[0], 64)
+	if err != nil || !(maxSeconds > 0 && maxSeconds <= maxSleepSeconds) {
+		return p.usageError(fmt.Errorf("max-seconds must be a number greater than 0 and at most %d", maxSleepSeconds))
+	}
+	duration := time.Duration(rand.Float64() * maxSeconds * float64(time.Second))
+	timer := time.NewTimer(duration)
 	defer timer.Stop()
 	select {
-	case result := <-item.result:
-		w.Header().Set("Content-Type", "application/json")
-		if !result.OK {
-			w.WriteHeader(http.StatusBadGateway)
-		}
-		_ = json.NewEncoder(w).Encode(result)
 	case <-timer.C:
-		b.removePending(id)
-		http.Error(w, "no extension responded; is Chrome open with the extension installed?", http.StatusGatewayTimeout)
-	case <-r.Context().Done():
-		b.removePending(id)
+	case <-ctx.Done():
+		return p.fail(bridge.Result{}, ctx.Err())
 	}
+	text := fmt.Sprintf("Slept for %.2f seconds", duration.Seconds())
+	return p.success(bridge.Result{OK: true, Output: text}, text)
 }
 
-func (b *bridge) removePending(id string) {
-	b.mu.Lock()
-	delete(b.pending, id)
-	b.mu.Unlock()
-}
-
-func (b *bridge) completeCommand(ack commandAck) {
-	b.mu.Lock()
-	item := b.pending[ack.ID]
-	delete(b.pending, ack.ID)
-	b.mu.Unlock()
-	if item != nil {
-		item.result <- commandResult{OK: ack.OK, Error: ack.Error, Options: ack.Options, Elements: ack.Elements, Output: ack.Output}
-	}
-}
-
-func randomID() (string, error) {
-	var raw [16]byte
-	if _, err := rand.Read(raw[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(raw[:]), nil
-}
-
-func validateURL(raw string) (string, error) {
-	parsed, err := url.ParseRequestURI(strings.TrimSpace(raw))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
-		return "", fmt.Errorf("URL must be an absolute http:// or https:// address")
-	}
-	return parsed.String(), nil
-}
-
-func sendCommand(request commandRequest) error {
-	data, err := json.Marshal(request)
+// runScreenshot captures the page and stores the PNG; the saved path is
+// printed and also returned in Result.Output for JSON consumers.
+func runScreenshot(ctx context.Context, args []string, p printer) int {
+	outPath, err := parseScreenshotArgs(args)
 	if err != nil {
-		return err
+		return p.usageError(err)
 	}
-	endpoint := "http://127.0.0.1:" + bridgePort + "/command"
-	httpRequest, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(data)))
+	result, err := newClient().Send(ctx, bridge.Request{Type: bridge.TypeScreenshot})
 	if err != nil {
-		return err
+		return p.fail(result, err)
 	}
-	httpRequest.Header.Set("Content-Type", "application/json")
-	client := &http.Client{Timeout: 47 * time.Second}
-	response, err := client.Do(httpRequest)
+	png, err := bridge.DecodeScreenshot(result)
 	if err != nil {
-		return fmt.Errorf("contact extension bridge at 127.0.0.1:%s (is `serve` running?): %w", bridgePort, err)
+		return p.fail(bridge.Result{}, fmt.Errorf("decode screenshot: %w", err))
 	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		message, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("extension bridge returned %s: %s", response.Status, strings.TrimSpace(string(message)))
+	if len(png) == 0 {
+		return p.fail(bridge.Result{}, errors.New("the extension returned no screenshot data"))
 	}
-	var result commandResult
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
-		return fmt.Errorf("read extension response: %w", err)
+	path, err := saveScreenshot(outPath, png, time.Now())
+	if err != nil {
+		return p.fail(bridge.Result{}, err)
 	}
-	if !result.OK {
-		return fmt.Errorf("extension command failed: %s", result.Error)
-	}
-	if len(result.Elements) > 0 || request.Type == "list_selectors" {
-		if len(result.Elements) == 0 {
-			fmt.Println("No visible clickable or fillable elements found")
-			return nil
+	result.Output = path
+	return p.success(result, path)
+}
+
+// parseScreenshotArgs extracts the optional --out <file> (or --out=<file>).
+func parseScreenshotArgs(args []string) (string, error) {
+	var outPath string
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; {
+		case arg == "--out":
+			if i+1 >= len(args) {
+				return "", errors.New("--out requires a file path")
+			}
+			i++
+			outPath = args[i]
+		case strings.HasPrefix(arg, "--out="):
+			outPath = strings.TrimPrefix(arg, "--out=")
+		default:
+			return "", fmt.Errorf("screenshot: unexpected argument %q", arg)
 		}
-		encoder := json.NewEncoder(os.Stdout)
-		encoder.SetIndent("", "  ")
-		return encoder.Encode(result.Elements)
-	} else if request.Type == "page_contains" {
-		fmt.Println(result.Output)
-	} else if len(result.Options) > 0 {
-		for index, option := range result.Options {
-			fmt.Printf("%d. %s\n", index+1, option)
+		if outPath == "" {
+			return "", errors.New("--out requires a file path")
 		}
-	} else if request.Type == "dropdown" {
-		fmt.Println("No dropdown options found")
-	} else {
-		fmt.Println("Command completed")
 	}
-	return nil
+	return outPath, nil
+}
+
+// saveScreenshot writes png (0600) to path, or to a timestamped file in
+// screenshotDir when path is empty, and returns the file written.
+func saveScreenshot(path string, png []byte, now time.Time) (string, error) {
+	if path != "" {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return "", fmt.Errorf("create screenshot directory: %w", err)
+		}
+		if err := os.WriteFile(path, png, 0o600); err != nil {
+			return "", fmt.Errorf("write screenshot: %w", err)
+		}
+		return path, nil
+	}
+	dir := screenshotDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create screenshot directory: %w", err)
+	}
+	stamp := now.Format("20060102-150405")
+	for attempt := 0; attempt < 1000; attempt++ {
+		name := stamp + ".png"
+		if attempt > 0 {
+			name = fmt.Sprintf("%s-%d.png", stamp, attempt)
+		}
+		candidate := filepath.Join(dir, name)
+		file, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("create screenshot file: %w", err)
+		}
+		_, writeErr := file.Write(png)
+		if err := errors.Join(writeErr, file.Close()); err != nil {
+			return "", fmt.Errorf("write screenshot: %w", err)
+		}
+		return candidate, nil
+	}
+	return "", fmt.Errorf("no free screenshot file name for %s in %s", stamp, dir)
 }

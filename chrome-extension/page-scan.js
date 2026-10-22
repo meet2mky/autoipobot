@@ -1,4 +1,24 @@
-function inspectPageElements() {
+// Page scanner injected into the target tab by the service worker
+// (list_selectors) and by the side panel (Scan page). chrome.scripting
+// serialises the function, so everything it needs must live inside its body:
+// no references to variables, constants or helpers declared outside.
+
+/**
+ * Collects the visible clickable, fillable and choice elements of the page.
+ *
+ * @param {{choiceGroupPattern?: string, ignoredContextPattern?: string}} hints
+ *   Site hints: case-insensitive regular expressions, as strings. The choice
+ *   group pattern marks containers whose pointer controls act as a choice
+ *   group; the ignored context pattern filters headings that must not be used
+ *   as context labels. Invalid or empty patterns disable the heuristic.
+ * @returns {{elements: Array<{kind: string, label: string, description: string,
+ *   context: string, selector: string}>, total: number}}
+ */
+function inspectPageElements(hints) {
+  const choiceGroupPattern = compilePattern(hints && hints.choiceGroupPattern);
+  const ignoredContextPattern = compilePattern(hints && hints.ignoredContextPattern);
+  const MAX_ELEMENTS = 200;
+  const NON_TEXT_INPUT_TYPES = ["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"];
   const candidateSelector = [
     "a[href]", "button", "input:not([type=hidden])", "textarea", "select",
     "label",
@@ -14,6 +34,7 @@ function inspectPageElements() {
     const text = (element.innerText || element.textContent || "").trim();
     if (text && text.length <= 100) candidateSet.add(element);
   }
+  const choiceCache = new Map();
   const candidates = [...candidateSet];
   candidates.sort((first, second) => Number(isChoiceControl(second)) - Number(isChoiceControl(first)));
   const elements = [];
@@ -27,21 +48,22 @@ function inspectPageElements() {
 
     const tag = element.tagName.toLowerCase();
     const inputType = tag === "input" ? element.type.toLowerCase() : "";
-    const choiceControl = isChoiceControl(element, labelControl);
+    const choiceControl = isChoiceControl(element);
     if (choiceControl && hasEquivalentChoiceAncestor(element)) continue;
     const editable = tag === "textarea" || tag === "select" || element.isContentEditable ||
-      (tag === "input" && !["button", "checkbox", "file", "hidden", "image", "radio", "reset", "submit"].includes(inputType));
+      (tag === "input" && !NON_TEXT_INPUT_TYPES.includes(inputType));
     const kind = choiceControl ? "Choice" : editable ? "Fillable" : "Clickable";
     const labelText = element.labels
       ? [...element.labels].map((label) => label.innerText.trim()).filter(Boolean).join(" / ")
       : "";
     const label = labelText || element.getAttribute("aria-label") || element.getAttribute("placeholder") ||
       element.getAttribute("title") || "";
-    const description = tag === "input" ? `input (${inputType || "text"})` :
-      (element.innerText || element.textContent || tag).replace(/\s+/g, " ").trim().slice(0, 90) || tag;
+    const description = tag === "input"
+      ? `input (${inputType || "text"})`
+      : (element.innerText || element.textContent || tag).replace(/\s+/g, " ").trim().slice(0, 90) || tag;
 
     total += 1;
-    if (elements.length < 200) {
+    if (elements.length < MAX_ELEMENTS) {
       elements.push({
         kind,
         label: label.slice(0, 90),
@@ -53,20 +75,37 @@ function inspectPageElements() {
   }
   return { elements, total };
 
-  function isChoiceControl(element, knownLabelControl = null) {
-    const labelControl = knownLabelControl || (element instanceof HTMLLabelElement ? element.control : null);
+  function compilePattern(source) {
+    if (typeof source !== "string" || !source.trim()) return null;
+    try {
+      return new RegExp(source, "i");
+    } catch {
+      return null;
+    }
+  }
+
+  function isChoiceControl(element) {
+    if (choiceCache.has(element)) return choiceCache.get(element);
+    const result = detectChoiceControl(element);
+    choiceCache.set(element, result);
+    return result;
+  }
+
+  function detectChoiceControl(element) {
+    const labelControl = element instanceof HTMLLabelElement ? element.control : null;
     const tag = element.tagName.toLowerCase();
     const inputType = tag === "input" ? element.type.toLowerCase() : "";
     if ((tag === "input" && ["radio", "checkbox"].includes(inputType)) ||
       ["radio", "checkbox", "switch"].includes(element.getAttribute("role")) ||
       (labelControl && ((labelControl instanceof HTMLInputElement && ["radio", "checkbox"].includes(labelControl.type)) ||
         ["radio", "checkbox"].includes(labelControl.getAttribute("role"))))) return true;
+    if (!choiceGroupPattern) return false;
 
     for (let ancestor = element.parentElement, depth = 0; ancestor && depth < 4; ancestor = ancestor.parentElement, depth += 1) {
       const groupText = (ancestor.innerText || "").replace(/\s+/g, " ");
-      if (!/\bapply\s+as\b/i.test(groupText)) continue;
+      if (!choiceGroupPattern.test(groupText)) continue;
       const ownText = (element.innerText || element.textContent || "").trim();
-      if (!ownText || ownText.length > 100 || /\bapply\s+as\b/i.test(ownText)) continue;
+      if (!ownText || ownText.length > 100 || choiceGroupPattern.test(ownText)) continue;
       const groupControls = [...ancestor.querySelectorAll("button, [role=button], a, [onclick], [tabindex], div, span")]
         .filter((candidate) => getComputedStyle(candidate).cursor === "pointer");
       if (groupControls.length >= 2 && groupControls.length <= 12) return true;
@@ -91,13 +130,13 @@ function inspectPageElements() {
     for (let ancestor = element.parentElement, depth = 0; ancestor && depth < 8; ancestor = ancestor.parentElement, depth += 1) {
       const groupText = (ancestor.innerText || "").trim();
       if (!groupText || groupText.length > 700) continue;
-      const candidates = [...ancestor.querySelectorAll(contextSelectors)];
-      for (const candidate of candidates) {
+      for (const candidate of ancestor.querySelectorAll(contextSelectors)) {
         if (candidate === element || candidate.contains(element)) continue;
         const style = getComputedStyle(candidate);
         if (style.display === "none" || style.visibility === "hidden" || !candidate.getClientRects().length) continue;
         const text = (candidate.innerText || candidate.textContent || "").replace(/\s+/g, " ").trim();
-        if (text.length < 4 || text.length > 120 || /^(dashboard|ipo order placement|apply as)$/i.test(text)) continue;
+        if (text.length < 4 || text.length > 120) continue;
+        if (ignoredContextPattern && ignoredContextPattern.test(text)) continue;
         return text;
       }
     }
@@ -124,18 +163,15 @@ function inspectPageElements() {
     const path = [];
     let current = element;
     while (current && current.nodeType === Node.ELEMENT_NODE) {
-      let segment = current.tagName.toLowerCase();
       if (current.id && document.querySelectorAll(`#${CSS.escape(current.id)}`).length === 1) {
-        segment = `#${CSS.escape(current.id)}`;
-        path.unshift(segment);
+        path.unshift(`#${CSS.escape(current.id)}`);
         break;
       }
       let siblingIndex = 1;
       for (let sibling = current.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
         if (sibling.tagName === current.tagName) siblingIndex += 1;
       }
-      segment += `:nth-of-type(${siblingIndex})`;
-      path.unshift(segment);
+      path.unshift(`${current.tagName.toLowerCase()}:nth-of-type(${siblingIndex})`);
       current = current.parentElement;
     }
     return path.join(" > ");

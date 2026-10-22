@@ -3,19 +3,87 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AutoIPO Website Opener settings</title>
+    <title>AutoIPO settings</title>
     <link rel="stylesheet" href="options.css">
+    <script src="shared.js" defer></script>
     <script src="options.js" defer></script>
   </head>
   <body>
     <main>
-      <h1>Website to open</h1>
-      <p>Click the extension button to open this address in a new tab.</p>
-      <form id="settings-form">
-        <label for="website-url">Website URL</label>
-        <input id="website-url" name="website-url" type="url" placeholder="https://example.com/" required>
-        <button type="submit">Save</button>
-        <span id="save-status" role="status" aria-live="polite"></span>
+      <h1>AutoIPO settings</h1>
+      <p class="lead">Settings are stored on this device only.</p>
+
+      <section class="card" aria-labelledby="connection-heading">
+        <h2 id="connection-heading">Bridge connection</h2>
+        <p id="connection-status" class="status-line" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span><span id="connection-status-text">Reading connection status…</span>
+        </p>
+        <p id="connection-detail" class="help-text"></p>
+        <button id="reconnect-bridge" type="button">Reconnect</button>
+        <span id="reconnect-status" class="feedback" role="status" aria-live="polite"></span>
+      </section>
+
+      <form id="settings-form" novalidate>
+        <section class="card" aria-labelledby="bridge-heading">
+          <h2 id="bridge-heading">Bridge</h2>
+          <div class="field">
+            <label for="bridge-port">Bridge port</label>
+            <input id="bridge-port" name="bridgePort" type="number" min="1" max="65535" step="1" inputmode="numeric" required aria-describedby="bridge-port-help bridge-port-feedback">
+            <span id="bridge-port-help" class="help-text">The AutoIPO app listens on 127.0.0.1 at this port (default 18765). Changing it reconnects immediately.</span>
+            <span id="bridge-port-feedback" class="feedback" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="typing-heading">
+          <h2 id="typing-heading">Typing</h2>
+          <div class="field-row">
+            <div class="field">
+              <label for="typing-min">Minimum delay per character (ms)</label>
+              <input id="typing-min" name="typingMin" type="number" min="0" max="5000" step="1" inputmode="numeric" required aria-describedby="typing-feedback">
+            </div>
+            <div class="field">
+              <label for="typing-max">Maximum delay per character (ms)</label>
+              <input id="typing-max" name="typingMax" type="number" min="0" max="5000" step="1" inputmode="numeric" required aria-describedby="typing-feedback">
+            </div>
+          </div>
+          <label class="checkbox">
+            <input id="typing-human" name="typingHuman" type="checkbox">
+            Type like a person (one character at a time with a random delay). When off, the whole value is inserted at once.
+          </label>
+          <span id="typing-feedback" class="feedback" aria-live="polite"></span>
+        </section>
+
+        <section class="card" aria-labelledby="hints-heading">
+          <h2 id="hints-heading">Site hints</h2>
+          <p class="help-text">Case-insensitive regular expressions used by the page scanner. Leave a field empty to disable that heuristic; invalid patterns are ignored.</p>
+          <div class="field">
+            <label for="choice-group-pattern">Choice group pattern</label>
+            <input id="choice-group-pattern" name="choiceGroupPattern" type="text" autocomplete="off" spellcheck="false" aria-describedby="choice-group-help choice-group-feedback">
+            <span id="choice-group-help" class="help-text">Containers whose text matches are treated as a group of selectable choices (for example “Apply as”).</span>
+            <span id="choice-group-feedback" class="feedback" aria-live="polite"></span>
+          </div>
+          <div class="field">
+            <label for="ignored-context-pattern">Ignored context pattern</label>
+            <input id="ignored-context-pattern" name="ignoredContextPattern" type="text" autocomplete="off" spellcheck="false" aria-describedby="ignored-context-help ignored-context-feedback">
+            <span id="ignored-context-help" class="help-text">Headings matching this pattern are not used as the “For:” context of an element.</span>
+            <span id="ignored-context-feedback" class="feedback" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <section class="card" aria-labelledby="website-heading">
+          <h2 id="website-heading">Website</h2>
+          <div class="field">
+            <label for="website-url">Default website URL</label>
+            <input id="website-url" name="websiteUrl" type="url" placeholder="https://example.com/" required aria-describedby="website-url-feedback">
+            <span id="website-url-feedback" class="feedback" aria-live="polite"></span>
+          </div>
+        </section>
+
+        <div class="form-actions">
+          <button type="submit" class="primary">Save settings</button>
+          <button id="restore-defaults" type="button">Restore defaults</button>
+          <span id="save-status" class="feedback" role="status" aria-live="polite"></span>
+        </div>
       </form>
     </main>
   </body>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "AutoIPO Website Opener",
-  "description": "Open a website, inspect page controls, fill a selected field, and view extension activity.",
-  "version": "1.0.0",
+  "name": "AutoIPO Browser Bridge",
+  "description": "Connects the AutoIPO app to Chrome: opens the target website and drives its pages with trusted input through the DevTools protocol (debugger permission).",
+  "version": "2.0.0",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "alarms", "activeTab", "scripting", "sidePanel", "debugger", "tabs"],
   "host_permissions": ["http://127.0.0.1/*", "http://*/*", "https://*/*"],
@@ -10,7 +10,7 @@
     "service_worker": "service-worker.js"
   },
   "action": {
-    "default_title": "Open AutoIPO side panel"
+    "default_title": "Open the AutoIPO side panel"
   },
   "side_panel": {
     "default_path": "popup.html"

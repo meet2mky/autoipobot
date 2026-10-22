@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>syntax check</title></head>
+  <body>
+    <pre id="out"></pre>
+    <script>
+      const out = document.querySelector("#out");
+      window.addEventListener("error", (event) => {
+        out.textContent += `ERROR ${event.message} @ ${event.filename}:${event.lineno}:${event.colno}\n`;
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        out.textContent += `REJECTION ${event.reason && (event.reason.message || event.reason)}\n`;
+      });
+      const file = new URLSearchParams(location.search).get("file");
+      const script = document.createElement("script");
+      script.src = file;
+      script.onload = () => { out.textContent += `LOADED ${file}\n`; };
+      script.onerror = () => { out.textContent += `FAILED TO FETCH ${file}\n`; };
+      document.head.append(script);
+    </script>
+  </body>
+</html>

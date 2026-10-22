@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>AutoIPO extension harness</title>
+    <script src="chrome-stub.js"></script>
+    <script src="../ext/shared.js"></script>
+    <script src="../ext/page-scan.js"></script>
+    <script src="harness.js" defer></script>
+  </head>
+  <body>
+    <div id="fixture">
+      <nav id="site-nav"><a href="#n0">Nav 0</a> <a href="#n1">Nav 1</a> <a href="#n2">Nav 2</a> <a href="#n3">Nav 3</a> <a href="#n4">Nav 4</a> <a href="#n5">Nav 5</a> <a href="#n6">Nav 6</a> <a href="#n7">Nav 7</a> <a href="#n8">Nav 8</a> <a href="#n9">Nav 9</a> <a href="#n10">Nav 10</a> <a href="#n11">Nav 11</a> <a href="#n12">Nav 12</a> <a href="#n13">Nav 13</a> </nav>
+      <div id="apply-section">
+        <h3 class="title">Apply as</h3>
+        <div id="apply-group"><span style="cursor:pointer" id="opt-self">Self</span> <span style="cursor:pointer" id="opt-minor">Minor</span></div>
+      </div>
+      <form id="fixture-form">
+        <label for="f-name">Full name</label><input id="f-name" type="text" name="fullName">
+        <label id="radio-label"><input type="radio" name="kind" value="a"> Option A</label>
+        <select id="f-bank" name="bank"><option value="">Choose</option><option value="1">Bank One</option><option value="2" disabled>Bank Two</option></select>
+        <button id="f-submit" type="button">Submit</button>
+        <a id="f-link" href="#x">Help</a>
+        <input type="hidden" name="h">
+      </form>
+    </div>
+    <pre id="results"></pre>
+    
+  </body>
+</html>

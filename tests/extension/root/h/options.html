@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Options harness</title>
+    <script src="chrome-stub.js"></script>
+    <script src="../ext/shared.js"></script>
+  </head>
+  <body>
+    <script>
+      (async () => {
+        const results = [];
+        const check = (name, condition, detail) => {
+          results.push(`${condition ? "PASS" : "FAIL"} ${name}${condition ? "" : ` -- ${detail === undefined ? "" : String(detail)}`}`);
+        };
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        const readText = (url) => { const xhr = new XMLHttpRequest(); xhr.open("GET", url, false); xhr.send(); return xhr.responseText; };
+        window.addEventListener("error", (event) => results.push(`OPTIONS PAGE ERROR ${event.message} (${event.filename}:${event.lineno})`));
+        const sent = [];
+        __stub.peers.request = async (message) => {
+          sent.push(message);
+          return { ok: true };
+        };
+        await chrome.storage.local.set({ bridgeState: "connected", bridgeDetail: "Connected to the AutoIPO bridge on port 18765", typing: { minMs: 10, maxMs: 20, humanLike: false } });
+        try {
+          const html = readText("../ext/options.html");
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          check("options: stale sentence removed", !html.includes("Click the extension button to open this address in a new tab."));
+          document.body.append(doc.querySelector("main"));
+          await new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = "../ext/options.js";
+            script.onload = resolve;
+            script.onerror = () => reject(new Error("options.js failed to load"));
+            document.head.append(script);
+          });
+          await sleep(100);
+          const value = (selector) => document.querySelector(selector).value;
+          const text = (selector) => document.querySelector(selector).textContent.trim();
+          check("options: port default", value("#bridge-port") === "18765", value("#bridge-port"));
+          check("options: typing loaded from storage", value("#typing-min") === "10" && value("#typing-max") === "20" && document.querySelector("#typing-human").checked === false);
+          check("options: hints defaults", value("#choice-group-pattern") === "\\bapply\\s+as\\b" && value("#ignored-context-pattern") === "^(dashboard|ipo order placement|apply as)$");
+          check("options: website default", value("#website-url") === "https://example.com/");
+          check("options: connection status rendered", text("#connection-status-text").startsWith("Connected to the AutoIPO bridge (port 18765)") && document.querySelector("#connection-status").classList.contains("connected"), text("#connection-status-text"));
+          check("options: pattern feedback valid", text("#choice-group-feedback") === "Valid pattern.");
+
+          const choice = document.querySelector("#choice-group-pattern");
+          choice.value = "(";
+          choice.dispatchEvent(new Event("input"));
+          check("options: invalid regex feedback", text("#choice-group-feedback").startsWith("Invalid pattern:"), text("#choice-group-feedback"));
+          document.querySelector("#settings-form").requestSubmit();
+          await sleep(50);
+          check("options: save blocked while invalid", text("#save-status").startsWith("Fix the highlighted fields") && __stub.areas.local.data.bridgePort === undefined, text("#save-status"));
+
+          choice.value = "";
+          choice.dispatchEvent(new Event("input"));
+          check("options: empty pattern feedback", text("#choice-group-feedback").startsWith("Empty"), text("#choice-group-feedback"));
+          document.querySelector("#bridge-port").value = "2345";
+          document.querySelector("#typing-min").value = "30";
+          document.querySelector("#typing-max").value = "10";
+          document.querySelector("#typing-min").dispatchEvent(new Event("input"));
+          check("options: min > max feedback", text("#typing-feedback").includes("must not exceed"), text("#typing-feedback"));
+          document.querySelector("#typing-max").value = "60";
+          document.querySelector("#typing-human").checked = true;
+          document.querySelector("#website-url").value = "https://site.example/app";
+          document.querySelector("#settings-form").requestSubmit();
+          await sleep(50);
+          const stored = __stub.areas.local.data;
+          check("options: saved values", stored.bridgePort === 2345 && JSON.stringify(stored.typing) === JSON.stringify({ minMs: 30, maxMs: 60, humanLike: true }) && stored.siteHints.choiceGroupPattern === "" && stored.siteHints.ignoredContextPattern === "^(dashboard|ipo order placement|apply as)$" && stored.websiteUrl === "https://site.example/app", JSON.stringify(stored));
+          check("options: saved status", text("#save-status") === "Saved", text("#save-status"));
+          await sleep(50);
+          check("options: status shows new port", text("#connection-status-text").includes("(port 2345)"), text("#connection-status-text"));
+
+          document.querySelector("#reconnect-bridge").click();
+          await sleep(20);
+          check("options: reconnect sends message", sent.some((message) => message.type === "reconnect_bridge") && text("#reconnect-status").startsWith("Reconnecting"), JSON.stringify(sent));
+
+          document.querySelector("#restore-defaults").click();
+          check("options: restore defaults fills form", value("#bridge-port") === "18765" && value("#typing-min") === "40" && value("#typing-max") === "120" && document.querySelector("#typing-human").checked === true);
+          check("options: restore does not persist until saved", __stub.areas.local.data.bridgePort === 2345);
+        } catch (error) {
+          results.push(`FATAL options: ${error && (error.stack || error.message || error)}`);
+        }
+        parent.postMessage({ kind: "options-results", results }, "*");
+      })();
+    </script>
+  </body>
+</html>

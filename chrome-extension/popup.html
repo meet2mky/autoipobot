@@ -3,81 +3,108 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Website opener</title>
+    <title>AutoIPO</title>
     <link rel="stylesheet" href="popup.css">
+    <script src="shared.js" defer></script>
+    <script src="page-scan.js" defer></script>
     <script src="popup.js" defer></script>
   </head>
   <body>
     <main>
-      <header>
+      <header class="panel-header">
         <div>
-          <h1>Website opener</h1>
-          <p id="bridge-status"><span class="status-dot"></span>Connecting to CLI…</p>
+          <h1>AutoIPO</h1>
+          <p id="bridge-status" class="status-line" role="status" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span><span id="bridge-status-text">Connecting to bridge…</span>
+          </p>
+          <p id="target-status" class="status-line" role="status" aria-live="polite">No target tab</p>
         </div>
+        <button id="open-options" class="text-button" type="button">Settings</button>
       </header>
+
+      <div id="automation-banner" class="banner" role="status" aria-live="assertive" hidden>
+        Automation in progress — controlled by the AutoIPO app
+      </div>
 
       <form id="settings-form">
         <label for="website-url">Website URL</label>
         <input id="website-url" type="url" placeholder="https://example.com/" required>
-        <button class="secondary" type="submit">Save URL</button>
-        <span id="save-status" role="status" aria-live="polite"></span>
+        <div class="field-actions">
+          <button class="secondary" type="submit">Save URL</button>
+          <span id="save-status" role="status" aria-live="polite"></span>
+        </div>
       </form>
 
-      <button id="open-site" class="primary" type="button">Open website in new tab</button>
+      <button id="open-site" class="primary" type="button" data-action>Open website in new tab</button>
 
       <section class="extension-tabs" aria-labelledby="extension-tabs-heading">
         <h2 id="extension-tabs-heading">Extension tabs</h2>
-        <p class="help-text">Green is selected. Yellow tabs are available to switch to.</p>
+        <p class="help-text">Green is the target tab. Select a yellow tab to make it the target. Hover a tab for its full address.</p>
         <ol id="extension-tabs" aria-label="Tabs opened by the extension"></ol>
       </section>
 
       <section class="field-filler" aria-labelledby="fill-heading">
         <h2 id="fill-heading">Fill a field in the target tab</h2>
-        <p class="help-text">Enter text to type into a normal input. For picklists, use the separate dropdown chooser below.</p>
+        <p class="help-text">Enter text to type into a normal input. For picklists, use the dropdown chooser below.</p>
         <label for="field-selector">Field selector</label>
         <input id="field-selector" type="text" placeholder='input[name="email"]' autocomplete="off" spellcheck="false" required>
         <label for="field-value">Value</label>
         <textarea id="field-value" rows="2" placeholder="Text to enter"></textarea>
         <div class="field-actions">
-          <button id="fill-field" class="secondary" type="button">Fill text</button>
-          <button id="click-element" class="secondary" type="button">Click element</button>
+          <button id="fill-field" class="secondary" type="button" data-action>Fill text</button>
+          <button id="click-element" class="secondary" type="button" data-action>Click element</button>
         </div>
-        <span id="fill-status" role="status" aria-live="polite"></span>
+        <span id="fill-status" class="status-text" role="status" aria-live="polite"></span>
       </section>
 
       <section class="field-filler" aria-labelledby="dropdown-heading">
         <h2 id="dropdown-heading">Choose from dropdown</h2>
         <p class="help-text">Load the target field’s choices, select one here, then choose it on the page.</p>
         <label for="dropdown-selector">Dropdown selector</label>
-        <input id="dropdown-selector" type="text" placeholder='input[name="user_id"]' autocomplete="off" spellcheck="false">
+        <input id="dropdown-selector" type="text" placeholder='select[name="bank"]' autocomplete="off" spellcheck="false">
         <div class="field-actions">
-          <button id="load-picklist" class="secondary" type="button">Load dropdown choices</button>
-          <button id="select-dropdown-choice" class="secondary" type="button">Select choice</button>
-          <button id="dismiss-dropdown" class="secondary" type="button">Dismiss dropdown</button>
+          <button id="load-picklist" class="secondary" type="button" data-action>Load dropdown choices</button>
+          <button id="select-dropdown-choice" class="secondary" type="button" data-action>Select choice</button>
+          <button id="dismiss-dropdown" class="secondary" type="button" data-action>Dismiss dropdown</button>
         </div>
         <label for="field-options">Available choices</label>
-        <select id="field-options" aria-label="Available dropdown choices">
+        <select id="field-options">
           <option value="">Load choices from the target field</option>
         </select>
-        <span id="picklist-status" role="status" aria-live="polite"></span>
+        <span id="picklist-status" class="status-text" role="status" aria-live="polite"></span>
       </section>
 
       <section class="page-scanner" aria-labelledby="scan-heading">
-        <div class="activity-heading">
+        <div class="section-heading">
           <h2 id="scan-heading">Page elements</h2>
-          <button id="scan-page" class="text-button" type="button">Scan page</button>
+          <button id="scan-page" class="text-button" type="button" data-action>Scan page</button>
         </div>
-        <p class="help-text">For fillable elements, choose Use for text or Use for dropdown. Radio and checkbox choices have a Select action.</p>
-        <p id="scan-status" role="status" aria-live="polite"></p>
-        <ol id="page-elements"></ol>
+        <p class="help-text">Fillable elements offer Use for text and Use for dropdown. Every element can be clicked; choices use Select.</p>
+        <div class="filter-row">
+          <label for="element-filter" class="visually-hidden">Filter page elements</label>
+          <input id="element-filter" type="search" placeholder="Filter by kind, label, description or selector" autocomplete="off" spellcheck="false">
+          <span id="element-count" class="help-text" role="status" aria-live="polite"></span>
+        </div>
+        <p id="scan-status" class="status-text" role="status" aria-live="polite"></p>
+        <ol id="page-elements" aria-label="Interactive elements found on the target page"></ol>
       </section>
 
       <section class="activity" aria-labelledby="activity-heading">
-        <div class="activity-heading">
+        <div class="section-heading">
           <h2 id="activity-heading">Recent activity</h2>
           <button id="clear-logs" class="text-button" type="button">Clear</button>
         </div>
         <ol id="command-logs" aria-live="polite"></ol>
+      </section>
+
+      <section class="controls" aria-labelledby="controls-heading">
+        <h2 id="controls-heading">Connection and browser control</h2>
+        <p id="debugger-status" class="help-text" role="status" aria-live="polite">Browser control is not held.</p>
+        <div class="field-actions">
+          <button id="release-debugger" class="secondary" type="button" data-action>Release browser control</button>
+          <button id="reconnect-bridge" class="secondary" type="button">Reconnect to bridge</button>
+        </div>
+        <span id="controls-status" class="status-text" role="status" aria-live="polite"></span>
       </section>
     </main>
   </body>
