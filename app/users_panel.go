@@ -177,7 +177,7 @@ func (p *usersPanel) showEditor(draft users.Record, previousPAN string) {
 		}
 		p.save(record, previousPAN)
 	}, p.ctx.window)
-	form.Resize(fyne.NewSize(dialogWidth, form.MinSize().Height))
+	form.Resize(dialogSize(p.ctx.window, form.MinSize().Height))
 	form.Show()
 }
 

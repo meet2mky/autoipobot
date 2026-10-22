@@ -178,8 +178,6 @@ func (p *commandsPanel) inspectCard() fyne.CanvasObject {
 			p.renderSelectors(result.Elements)
 		})
 	}
-	selectorScroll := container.NewVScroll(p.selectorRows)
-	selectorScroll.SetMinSize(fyne.NewSize(0, 180))
 
 	containsSelector := hintEntry(".account-dashboard")
 	contains := widget.NewButton("Page contains?", nil)
@@ -196,12 +194,17 @@ func (p *commandsPanel) inspectCard() fyne.CanvasObject {
 	p.screenshotLabel = wrappedLabel("")
 
 	return widget.NewCard("Inspect", "", container.NewVBox(
-		fieldRow("Elements on the page", container.NewVBox(container.NewHBox(list), selectorScroll)),
+		fieldRow("Elements on the page", container.NewVBox(container.NewHBox(list), p.selectorRows)),
 		fieldRow("Page contains", container.NewBorder(nil, nil, nil, contains, containsSelector)),
 		fieldRow("Read text", container.NewBorder(nil, nil, nil, read, readSelector)),
 		fieldRow("Screenshot", container.NewVBox(container.NewHBox(shot), p.screenshotLabel)),
 	))
 }
+
+// maxSelectorRows bounds the inline element list; the card scrolls with the
+// rest of the tab instead of nesting a second scroll area, and the full list
+// is always in the Output pane.
+const maxSelectorRows = 40
 
 // renderSelectors shows the elements found by list-selectors with a "Use"
 // button that copies the selector into the Click and Fill fields.
@@ -209,6 +212,10 @@ func (p *commandsPanel) renderSelectors(elements []bridge.SelectorMetadata) {
 	p.selectorRows.Objects = nil
 	if len(elements) == 0 {
 		p.selectorRows.Add(widget.NewLabel("No visible clickable or fillable elements found."))
+	}
+	if len(elements) > maxSelectorRows {
+		p.selectorRows.Add(wrappedLabel(fmt.Sprintf("Showing the first %d of %d elements; the complete list is in the Output pane.", maxSelectorRows, len(elements))))
+		elements = elements[:maxSelectorRows]
 	}
 	for _, element := range elements {
 		description := element.Kind + " · " + firstNonBlank(element.Label, element.Description)

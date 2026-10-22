@@ -43,11 +43,11 @@ type nodeForm struct {
 	hint         *widget.Label
 	kind         *widget.Select
 	name         *widget.Entry
-	placeholders *widget.Entry
+	placeholders *growingEntry
 	command      *widget.Select
 	args         [2]*widget.Entry
 	saveAs       *widget.Entry
-	expression   *widget.Entry
+	expression   *growingEntry
 	retries      *widget.Entry
 	next         *widget.Select
 	onTrue       *widget.Select
@@ -107,10 +107,11 @@ func (f *nodeForm) buildInputs() {
 	})
 	f.name = hintEntry("State name")
 	f.name.OnChanged = func(value string) { f.edit(func(node *flow.Node) { node.Name = value }) }
-	f.placeholders = widget.NewMultiLineEntry()
-	f.placeholders.SetPlaceHolder("@username=myusername\n@account=12345")
-	f.placeholders.SetMinRowsVisible(3)
-	f.placeholders.OnChanged = func(value string) { f.edit(func(node *flow.Node) { node.PlaceholderText = value }) }
+	f.placeholders = newGrowingEntry("@username=myusername\n@account=12345")
+	f.placeholders.OnChanged = func(value string) {
+		f.placeholders.fit(value)
+		f.edit(func(node *flow.Node) { node.PlaceholderText = value })
+	}
 	f.command = widget.NewSelect(flow.Commands, func(command string) {
 		if f.loading {
 			return
@@ -120,6 +121,7 @@ func (f *nodeForm) buildInputs() {
 			node.Args = resizeArgs(node.Args, flow.CommandArgCount(command))
 		})
 		f.showArgs(f.editor.selectedNode())
+		f.relayout()
 	})
 	for i := range f.args {
 		index := i
@@ -136,10 +138,11 @@ func (f *nodeForm) buildInputs() {
 	f.saveAs.OnChanged = func(value string) {
 		f.edit(func(node *flow.Node) { node.SaveAs = strings.TrimPrefix(strings.TrimSpace(value), "@") })
 	}
-	f.expression = widget.NewMultiLineEntry()
-	f.expression.SetPlaceHolder(`pageContains("#kc-login") AND NOT pageContains(".error")`)
-	f.expression.SetMinRowsVisible(3)
-	f.expression.OnChanged = func(value string) { f.edit(func(node *flow.Node) { node.Expression = value }) }
+	f.expression = newGrowingEntry(`pageContains("#kc-login") AND NOT pageContains(".error")`)
+	f.expression.OnChanged = func(value string) {
+		f.expression.fit(value)
+		f.edit(func(node *flow.Node) { node.Expression = value })
+	}
 	f.retries = hintEntry("0")
 	f.retries.OnChanged = func(value string) {
 		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil && parsed >= 0 {
@@ -186,6 +189,7 @@ func (f *nodeForm) edit(change func(node *flow.Node)) {
 func (f *nodeForm) show(node *flow.Node) {
 	f.loading = true
 	defer func() { f.loading = false }()
+	defer f.relayout()
 	for _, row := range f.rows {
 		row.Hide()
 	}
@@ -201,7 +205,7 @@ func (f *nodeForm) show(node *flow.Node) {
 	f.hint.SetText(nodeHint(node.Type))
 	switch node.Type {
 	case flow.TypeStart:
-		f.placeholders.SetText(node.PlaceholderText)
+		f.placeholders.setText(node.PlaceholderText)
 		f.showRows(rowPlaceholders, rowNext, rowActions)
 		f.insertNext.Show()
 	case flow.TypeCommand:
@@ -217,7 +221,7 @@ func (f *nodeForm) show(node *flow.Node) {
 	case flow.TypeQualifier:
 		f.kind.SetSelected(flow.TypeQualifier)
 		f.name.SetText(node.Name)
-		f.expression.SetText(node.Expression)
+		f.expression.setText(node.Expression)
 		f.retries.SetText(strconv.Itoa(node.Retries))
 		f.showRows(rowKind, rowName, rowExpression, rowRetries, rowTrue, rowFalse, rowActions)
 		f.insertTrue.Show()
@@ -225,6 +229,14 @@ func (f *nodeForm) show(node *flow.Node) {
 		f.deleteBtn.Show()
 	}
 	f.refreshTargets()
+}
+
+// relayout re-runs the form's layout after rows or buttons were shown or
+// hidden. Fyne's Show/Hide only flip a flag, and a container whose size did
+// not change is not laid out again, so without this a row that was hidden and
+// shown again could keep the position it had in a different row set.
+func (f *nodeForm) relayout() {
+	f.root.Refresh()
 }
 
 func nodeHint(kind string) string {

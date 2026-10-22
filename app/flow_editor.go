@@ -28,6 +28,8 @@ type flowEditor struct {
 	selectedID string
 	runningID  string
 	zoom       float32
+	autoFit    bool // keep the diagram fitted while the viewport changes
+	viewportSz fyne.Size
 	dirty      bool
 	loading    bool
 
@@ -42,7 +44,7 @@ type flowEditor struct {
 }
 
 func newFlowEditor(p *flowsPanel) *flowEditor {
-	e := &flowEditor{panel: p, zoom: 1, flow: flow.New("")}
+	e := &flowEditor{panel: p, zoom: 1, autoFit: true, flow: flow.New("")}
 	e.canvas = newFlowCanvas(e.selectNode)
 	e.canvasScroll = container.NewScroll(e.canvas)
 	e.form = newNodeForm(e)
@@ -69,15 +71,18 @@ func newFlowEditor(p *flowsPanel) *flowEditor {
 		container.NewHBox(widget.NewLabel("Keep run logs"), e.keepEntry, widget.NewButton("Add state", e.addNode), save),
 		e.nameEntry)
 	zoomBar := container.NewHBox(
-		widget.NewButton("−", func() { e.setZoom(e.zoom * 0.8) }),
+		widget.NewButton("−", func() { e.manualZoom(e.zoom * 0.8) }),
 		e.zoomLabel,
-		widget.NewButton("+", func() { e.setZoom(e.zoom * 1.25) }),
-		widget.NewButton("Fit", e.fitZoom),
-		widget.NewButton("100%", func() { e.setZoom(1) }),
+		widget.NewButton("+", func() { e.manualZoom(e.zoom * 1.25) }),
+		widget.NewButton("Fit", func() { e.autoFit = true; e.fitZoom() }),
+		widget.NewButton("100%", func() { e.manualZoom(1) }),
 	)
 	lint := widget.NewCard("Lint", "", e.lintRows)
-	left := container.NewBorder(nil, container.NewVBox(zoomBar, lint), nil, nil, e.canvasScroll)
-	split := container.NewHSplit(left, container.NewVScroll(e.form.root))
+	// The canvas is re-fitted whenever its viewport changes (window resize,
+	// maximise, split drag) until the user zooms manually.
+	viewport := newSizeObserver(e.canvasScroll, e.onViewportResized)
+	left := container.NewBorder(nil, container.NewVBox(zoomBar, lint), nil, nil, viewport)
+	split := container.NewHSplit(left, newPageScroll(e.form.root))
 	split.SetOffset(0.64)
 	e.root = container.NewBorder(top, nil, nil, nil, split)
 	return e
@@ -93,19 +98,44 @@ func (e *flowEditor) open(f flow.Flow) {
 	e.loading = false
 	e.selectedID = e.flow.StartID
 	e.form.show(e.selectedNode())
+	e.autoFit = true
 	e.fitZoom()
 }
 
+// viewport returns the last observed canvas viewport; before the builder has
+// been laid out (it opens from the list page) a sensible default is used and
+// onViewportResized corrects the zoom as soon as the real size is known.
 func (e *flowEditor) viewport() graphlayout.Size {
-	size := e.canvasScroll.Size()
+	size := e.viewportSz
 	if size.Width < 100 || size.Height < 100 {
 		return graphlayout.Size{Width: 720, Height: 480}
 	}
-	return graphlayout.Size{Width: size.Width, Height: size.Height}
+	// Leave a small margin so the fitted diagram never touches the edges.
+	return graphlayout.Size{Width: size.Width - 24, Height: size.Height - 24}
+}
+
+// onViewportResized runs from the layout pass; the refit is deferred so the
+// canvas is not rebuilt while its parent is still laying out.
+func (e *flowEditor) onViewportResized(size fyne.Size) {
+	e.viewportSz = size
+	if !e.autoFit {
+		return
+	}
+	fyne.Do(func() {
+		if e.autoFit && e.viewportSz == size {
+			e.fitZoom()
+		}
+	})
 }
 
 func (e *flowEditor) fitZoom() {
 	e.setZoom(graphlayout.FitZoom(idLayers(e.flow.Layers()), e.viewport(), graphlayout.DefaultOptions()))
+}
+
+// manualZoom applies a user-chosen zoom and stops auto-fitting.
+func (e *flowEditor) manualZoom(zoom float32) {
+	e.autoFit = false
+	e.setZoom(zoom)
 }
 
 func (e *flowEditor) setZoom(zoom float32) {

@@ -18,8 +18,21 @@ import (
 	"autoipo/internal/users"
 )
 
-// dialogWidth is the preferred width of the Play/Schedule forms.
-const dialogWidth float32 = 520
+// preferredDialogWidth is the width of the Play/Schedule/user/settings forms
+// when the window is wide enough; dialogSize clamps it to the window.
+const preferredDialogWidth float32 = 520
+
+// dialogSize returns a dialog size that fits inside the window with a margin,
+// so forms stay fully visible on small windows.
+func dialogSize(window fyne.Window, minHeight float32) fyne.Size {
+	width := preferredDialogWidth
+	if canvas := window.Canvas(); canvas != nil {
+		if available := canvas.Size().Width - 64; available > 280 && available < width {
+			width = available
+		}
+	}
+	return fyne.NewSize(width, minHeight)
+}
 
 // flowRunner starts flows from the app (Play dialog) and creates schedule
 // entries (Schedule… dialog). Only one app-initiated run exists at a time.
@@ -69,7 +82,7 @@ func (r *flowRunner) showPlayDialog(f flow.Flow, records []users.Record) {
 		}
 		r.start(f, values, picker.selected())
 	}, r.panel.ctx.window)
-	form.Resize(fyne.NewSize(dialogWidth, form.MinSize().Height))
+	form.Resize(dialogSize(r.panel.ctx.window, form.MinSize().Height))
 	form.Show()
 }
 
@@ -186,7 +199,7 @@ func (r *flowRunner) showScheduleDialog(f flow.Flow) {
 			}
 			r.addSchedule(f, picker.selected(), when)
 		}, r.panel.ctx.window)
-		form.Resize(fyne.NewSize(dialogWidth, form.MinSize().Height))
+		form.Resize(dialogSize(r.panel.ctx.window, form.MinSize().Height))
 		form.Show()
 	})
 }

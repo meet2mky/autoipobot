@@ -54,13 +54,13 @@ type commandsPanel struct {
 func newCommandsPanel(ctx *appContext) *commandsPanel {
 	p := &commandsPanel{
 		ctx:    ctx,
-		output: outputlog.New(outputlog.DefaultCapacity),
+		output: outputlog.New(textPaneMaxLines),
 		busy:   map[*widget.Button]bool{},
 		ready:  map[*widget.Button]func() bool{},
 	}
 	outputCard := p.buildOutputCard()
 	cards := container.NewVBox(p.bridgeCard(), p.navigateCard(), p.interactCard(), p.inspectCard())
-	split := container.NewHSplit(container.NewVScroll(cards), outputCard)
+	split := container.NewHSplit(newPageScroll(cards), outputCard)
 	split.SetOffset(0.58)
 	p.root = split
 	p.output.SetOnChange(func() { fyne.Do(p.renderOutput) })

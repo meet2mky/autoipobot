@@ -61,7 +61,7 @@ func newSettingsPanel(ctx *appContext) *settingsPanel {
 		infoRow{"Data directory", dataDir},
 		infoRow{"Daemon binary", widget.NewLabel(paths.DaemonBinary())},
 	))
-	p.root = container.NewVScroll(container.NewVBox(credentials, storage))
+	p.root = newPageScroll(container.NewVBox(credentials, storage))
 	return p
 }
 
@@ -191,6 +191,6 @@ func showFirstRunDialog(ctx *appContext, onSaved func()) {
 			}
 		})
 	}, ctx.window)
-	form.Resize(fyne.NewSize(dialogWidth, form.MinSize().Height))
+	form.Resize(dialogSize(ctx.window, form.MinSize().Height))
 	form.Show()
 }

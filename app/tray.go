@@ -35,6 +35,9 @@ func setupTray(ctx *appContext, onQuit func()) *trayController {
 	show := fyne.NewMenuItem("Show window", func() {
 		ctx.window.Show()
 		ctx.window.RequestFocus()
+		// A window that was hidden while the status ticker kept updating
+		// widgets can come back with a stale frame; force a repaint.
+		ctx.window.Content().Refresh()
 	})
 	quit := fyne.NewMenuItem("Quit", onQuit)
 	quit.IsQuit = true
