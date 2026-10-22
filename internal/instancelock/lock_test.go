@@ -69,3 +69,28 @@ func TestWaitTimesOutWhileHeld(t *testing.T) {
 	}
 	_ = lock.Release()
 }
+
+func TestWritePIDIsReadableWhileHeld(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pid.lock")
+	if ReadPID(path) != 0 {
+		t.Fatal("missing file should read as 0")
+	}
+	lock, _, err := Acquire(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := lock.WritePID(4242); err != nil {
+		t.Fatalf("WritePID: %v", err)
+	}
+	if got := ReadPID(path); got != 4242 {
+		t.Fatalf("ReadPID while held = %d, want 4242", got)
+	}
+	if err := lock.WritePID(7); err != nil || ReadPID(path) != 7 {
+		t.Fatalf("rewrite: %v / %d", err, ReadPID(path))
+	}
+	_ = lock.Release()
+	var released *Lock
+	if err := released.WritePID(1); err == nil {
+		t.Fatal("WritePID on an unheld lock must fail")
+	}
+}

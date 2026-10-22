@@ -101,7 +101,9 @@ func ReadPID() (int, error) {
 }
 
 // Running reports whether a daemon currently holds the daemon lock. The PID
-// is best-effort (0 when unknown).
+// comes from the lock file itself (written by the holder, see
+// instancelock.Lock.WritePID) and only falls back to the separate PID file
+// for daemons that predate that convention; it is 0 when unknown.
 func Running() (pid int, running bool) {
 	lock, acquired, err := instancelock.Acquire(paths.DaemonLockFile())
 	if err != nil {
@@ -115,6 +117,9 @@ func Running() (pid int, running bool) {
 	if acquired {
 		_ = lock.Release()
 		return 0, false
+	}
+	if pid = instancelock.ReadPID(paths.DaemonLockFile()); pid > 0 {
+		return pid, true
 	}
 	pid, _ = ReadPID()
 	return pid, true
@@ -183,7 +188,7 @@ func Stop(timeout time.Duration) error {
 		return nil
 	}
 	if pid <= 0 {
-		return errors.New("daemon is running but its PID file is missing; stop it manually")
+		return errors.New("daemon is running but its PID is unknown (lock file has no PID and .data/autoipo.pid is missing); stop it manually")
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {

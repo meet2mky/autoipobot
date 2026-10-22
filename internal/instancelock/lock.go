@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -85,4 +87,35 @@ func Wait(path string, timeout time.Duration) (*Lock, error) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// WritePID records pid inside the lock file. Only the lock holder can write
+// it, so readers can trust the content as the identity of the live owner
+// (unlike a separate PID file, which can be stale or edited).
+func (l *Lock) WritePID(pid int) error {
+	if l == nil || l.file == nil {
+		return errors.New("instancelock: lock is not held")
+	}
+	if err := l.file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := l.file.WriteAt([]byte(strconv.Itoa(pid)+"\n"), 0); err != nil {
+		return err
+	}
+	return l.file.Sync()
+}
+
+// ReadPID returns the PID written into the lock file by its holder, or 0
+// when the file is missing or empty. It does not check whether the lock is
+// currently held; combine it with a failed Acquire for that.
+func ReadPID(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil || pid <= 0 {
+		return 0
+	}
+	return pid
 }

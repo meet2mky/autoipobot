@@ -76,6 +76,12 @@ func runDaemon(stderr io.Writer, sec secrets.Store) int {
 			log.Printf("cannot release daemon lock: %v", err)
 		}
 	}()
+	// The PID inside the lock file is what the desktop app and deploy.sh
+	// trust (only the holder can write it); .data/autoipo.pid stays for humans.
+	if err := lock.WritePID(os.Getpid()); err != nil {
+		log.Printf("cannot record PID in lock file: %v", err)
+		return 1
+	}
 	if err := daemonctl.WritePIDFile(os.Getpid()); err != nil {
 		log.Printf("cannot write PID file: %v", err)
 		return 1

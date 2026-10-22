@@ -27,6 +27,20 @@ func TestRunningReflectsLock(t *testing.T) {
 	if !running || pid != os.Getpid() {
 		t.Fatalf("Running = (%d, %v), want (%d, true)", pid, running, os.Getpid())
 	}
+	// The PID written into the lock file by the holder wins over a stale or
+	// missing .data/autoipo.pid.
+	if err := lock.WritePID(424242); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePIDFile(); err != nil {
+		t.Fatal(err)
+	}
+	if pid, running := Running(); !running || pid != 424242 {
+		t.Fatalf("Running with lock-file PID = (%d, %v), want (424242, true)", pid, running)
+	}
+	if err := WritePIDFile(os.Getpid()); err != nil {
+		t.Fatal(err)
+	}
 	_ = lock.Release()
 	if _, running := Running(); running {
 		t.Fatal("Running should be false after release")
