@@ -54,7 +54,7 @@ Extension commands (need "serve" running and Chrome open with the extension):
   list-selectors                List the visible clickable and fillable elements
   page-contains <selector>      Print true or false
   screenshot [--out <file>]     Save a PNG of the page and print its path
-                                (default: .data/screenshots/<YYYYMMDD-HHMMSS>.png)
+                                (default: .data/screenshots/<YYYYMMDD-HHMMSS>.png|.jpg)
 
 Local:
   random-sleep <max-seconds>    Sleep for a random time up to max-seconds (<= 86400)
@@ -363,10 +363,11 @@ func saveScreenshot(path string, png []byte, now time.Time) (string, error) {
 		return "", fmt.Errorf("create screenshot directory: %w", err)
 	}
 	stamp := now.Format("20060102-150405")
+	ext := bridge.ImageExtension(png)
 	for attempt := 0; attempt < 1000; attempt++ {
-		name := stamp + ".png"
+		name := stamp + ext
 		if attempt > 0 {
-			name = fmt.Sprintf("%s-%d.png", stamp, attempt)
+			name = fmt.Sprintf("%s-%d%s", stamp, attempt, ext)
 		}
 		candidate := filepath.Join(dir, name)
 		file, err := os.OpenFile(candidate, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)

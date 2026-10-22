@@ -176,14 +176,25 @@ func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) err
 }
 
 // SendDocument uploads a file (e.g. a screenshot) with an optional caption.
+// Documents are delivered unmodified (no recompression) up to 50 MB.
 func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string, content []byte, caption string) error {
+	return c.upload(ctx, "sendDocument", "document", chatID, filename, content, caption)
+}
+
+// SendPhoto uploads an image that Telegram shows inline (recompressed, max
+// 10 MB and 10000 px total). Use SendDocument for pixel-exact copies.
+func (c *Client) SendPhoto(ctx context.Context, chatID int64, filename string, content []byte, caption string) error {
+	return c.upload(ctx, "sendPhoto", "photo", chatID, filename, content, caption)
+}
+
+func (c *Client) upload(ctx context.Context, method, field string, chatID int64, filename string, content []byte, caption string) error {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	_ = writer.WriteField("chat_id", strconv.FormatInt(chatID, 10))
 	if caption != "" {
 		_ = writer.WriteField("caption", truncate(caption, 1024))
 	}
-	part, err := writer.CreateFormFile("document", filename)
+	part, err := writer.CreateFormFile(field, filename)
 	if err != nil {
 		return err
 	}
@@ -193,7 +204,7 @@ func (c *Client) SendDocument(ctx context.Context, chatID int64, filename string
 	if err := writer.Close(); err != nil {
 		return err
 	}
-	return c.call(ctx, "sendDocument", &body, writer.FormDataContentType(), nil)
+	return c.call(ctx, method, &body, writer.FormDataContentType(), nil)
 }
 
 func splitMessage(text string, limit int) []string {

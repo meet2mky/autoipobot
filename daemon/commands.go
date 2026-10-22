@@ -46,6 +46,7 @@ const helpText = `Commands:
 type outbox interface {
 	text(text string)
 	document(filename string, content []byte, caption string)
+	photo(filename string, content []byte, caption string)
 }
 
 // bot interprets incoming Telegram messages. handle is called from the poll
@@ -331,11 +332,11 @@ func (b *bot) screenshotCommand(ctx context.Context, now time.Time) {
 			b.out.text("screenshot failed: " + err.Error())
 			return
 		}
-		b.out.document("screenshot-"+now.Format("20060102-150405")+".png", png, b.label+" screenshot")
+		b.out.photo("screenshot-"+now.Format("20060102-150405")+bridge.ImageExtension(png), png, b.label+" screenshot")
 	}()
 }
 
-// captureScreenshot asks the extension for a PNG of the target tab.
+// captureScreenshot asks the extension for an image of the target tab.
 func captureScreenshot(ctx context.Context, client *bridge.Client) ([]byte, error) {
 	result, err := client.Send(ctx, bridge.Request{Type: bridge.TypeScreenshot})
 	if err != nil {

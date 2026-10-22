@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"autoipo/internal/bridge"
 	"autoipo/internal/envfile"
 	"autoipo/internal/paths"
 )
@@ -189,6 +190,9 @@ func PruneRuns(flowID string, keep int) error {
 		if err := os.Remove(run.Path); err != nil && !os.IsNotExist(err) {
 			return err
 		}
+		if shot := RunScreenshot(flowID, run.RunID); shot != "" {
+			_ = os.Remove(shot)
+		}
 	}
 	return nil
 }
@@ -282,7 +286,7 @@ type LastRun struct {
 	Cancelled  bool      `json:"cancelled,omitempty"`
 	Reason     string    `json:"reason,omitempty"`
 	Steps      int       `json:"steps"`
-	Screenshot string    `json:"screenshot,omitempty"` // path to PNG
+	Screenshot string    `json:"screenshot,omitempty"` // path to the end-of-run image
 }
 
 // Summary renders the last run for humans.
@@ -334,18 +338,33 @@ func ReadLastRun() (LastRun, error) {
 	return last, nil
 }
 
-// SaveScreenshot stores a PNG next to the run log and returns its path.
-func SaveScreenshot(flowID, runID string, png []byte) (string, error) {
-	if len(png) == 0 {
+// screenshotExtensions lists the image types a run screenshot may use.
+var screenshotExtensions = []string{".png", ".jpg", ".webp"}
+
+// SaveScreenshot stores the image next to the run log (extension chosen from
+// the image bytes) and returns its path.
+func SaveScreenshot(flowID, runID string, image []byte) (string, error) {
+	if len(image) == 0 {
 		return "", errors.New("empty screenshot")
 	}
 	dir := RunsDir(flowID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, runID+".png")
-	if err := os.WriteFile(path, png, 0o600); err != nil {
+	path := filepath.Join(dir, runID+bridge.ImageExtension(image))
+	if err := os.WriteFile(path, image, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
+}
+
+// RunScreenshot returns the screenshot saved for a run, or "" when none exists.
+func RunScreenshot(flowID, runID string) string {
+	for _, ext := range screenshotExtensions {
+		path := filepath.Join(RunsDir(flowID), runID+ext)
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	return ""
 }

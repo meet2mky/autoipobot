@@ -344,3 +344,18 @@ func DecodeScreenshot(result Result) ([]byte, error) {
 	}
 	return base64.StdEncoding.DecodeString(encoded)
 }
+
+// ImageExtension returns the file extension (".png", ".jpg" or ".webp")
+// matching the image bytes, defaulting to ".png" for unknown data.
+func ImageExtension(data []byte) string {
+	switch {
+	case len(data) >= 8 && string(data[:8]) == "\x89PNG\r\n\x1a\n":
+		return ".png"
+	case len(data) >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF:
+		return ".jpg"
+	case len(data) >= 12 && string(data[:4]) == "RIFF" && string(data[8:12]) == "WEBP":
+		return ".webp"
+	default:
+		return ".png"
+	}
+}

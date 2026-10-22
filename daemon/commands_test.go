@@ -165,6 +165,24 @@ func TestRunCommandSuccess(t *testing.T) {
 	}
 }
 
+func TestRunCommandSuccessSendsScreenshot(t *testing.T) {
+	env := newTestEnv(t, &fakeExecutor{shot: []byte{0xFF, 0xD8, 0xFF, 0xE0, 'j', 'p', 'g'}}, nil)
+	saveFlows(t, testFlow("Apply"))
+	env.send(t, "/run apply")
+	env.bot.runner.wait()
+	docs := env.out.allDocs()
+	if len(docs) != 1 || !docs[0].photo || !strings.HasSuffix(docs[0].name, ".jpg") {
+		t.Fatalf("success must also deliver the screenshot: %+v", docs)
+	}
+	if !strings.Contains(docs[0].caption, "Apply succeeded at") {
+		t.Fatalf("caption = %q", docs[0].caption)
+	}
+	last, _ := flow.ReadLastRun()
+	if last.Screenshot == "" || !strings.HasSuffix(last.Screenshot, ".jpg") {
+		t.Fatalf("last run should record the screenshot path: %+v", last)
+	}
+}
+
 func TestRunCommandFailureSendsScreenshot(t *testing.T) {
 	env := newTestEnv(t, &fakeExecutor{fail: true, shot: []byte("png-bytes")}, nil)
 	saveFlows(t, testFlow("Apply"))
@@ -172,12 +190,16 @@ func TestRunCommandFailureSendsScreenshot(t *testing.T) {
 		t.Fatalf("start reply = %q", got)
 	}
 	env.bot.runner.wait()
-	if got := env.out.lastText(); !strings.Contains(got, "Apply failed at") || !strings.Contains(got, "open failed: element not found") {
-		t.Fatalf("summary = %q", got)
-	}
+	// With a screenshot the summary travels as the photo caption (one message).
 	docs := env.out.allDocs()
-	if len(docs) != 1 || string(docs[0].content) != "png-bytes" || docs[0].caption != "open failed: element not found" || !strings.HasSuffix(docs[0].name, ".png") {
+	if len(docs) != 1 || !docs[0].photo || string(docs[0].content) != "png-bytes" || !strings.HasSuffix(docs[0].name, ".png") {
 		t.Fatalf("docs = %+v", docs)
+	}
+	if caption := docs[0].caption; !strings.Contains(caption, "Apply failed at") || !strings.Contains(caption, "open failed: element not found") {
+		t.Fatalf("caption = %q", caption)
+	}
+	if got := env.out.lastText(); !strings.HasPrefix(got, "started Apply") {
+		t.Fatalf("no extra text expected after the photo, got %q", got)
 	}
 	if env.bot.runner.busy() || flow.RunActive() {
 		t.Fatal("run lock must be released after a failure")

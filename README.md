@@ -4,7 +4,7 @@
 
 | Part | Path | What it does |
 |---|---|---|
-| Daemon | `daemon/` → `bin/autoipo` | Long-polls Telegram, answers `/status`, runs and schedules flows, sends results (and failure screenshots) back to the chat. |
+| Daemon | `daemon/` → `bin/autoipo` | Long-polls Telegram, answers `/status`, runs and schedules flows, sends results with an end-of-run screenshot back to the chat. |
 | Desktop app | `app/` → `bin/autoipoapp` | Fyne UI + menu-bar item: daemon control, live logs, manual browser commands, the flow builder, users and settings. |
 | Extension bridge | `chrome-extension-cli/` → `bin/chrome-extension-cli` | Loopback HTTP/WebSocket bridge between Go programs and the Chrome extension, plus a CLI client. |
 | Chrome extension | `chrome-extension/` | Side panel + service worker that performs page actions with trusted input through the DevTools protocol. |
@@ -79,7 +79,7 @@ All mutable state is under `.data/` (git-ignored, mode 0700):
 |---|---|
 | `env` | `TG_CHAT_ID`, `HOST_LABEL` (the token is **not** stored here) |
 | `users` | user records without passwords (`users.bak` is the previous version) |
-| `flows.json`, `flows/<id>/runs/*.log|png` | flows, run transcripts and failure screenshots |
+| `flows.json`, `flows/<id>/runs/*.log|jpg` | flows, run transcripts and end-of-run screenshots |
 | `schedules.json` | scheduled runs |
 | `bridge.token` | random session token required for `POST /command` on the bridge |
 | `autoipo.pid`, `*.lock`, `daemon-status.json`, `last-run.json`, `telegram.offset` | runtime state |
@@ -106,7 +106,7 @@ Telegram commands:
 | `/ping` | liveness + uptime |
 | `/status` | daemon uptime/last poll, bridge + extension connectivity, active run, last run result, pending schedules |
 | `/flows`, `/users` | list flows / users (PANs masked, no credentials) |
-| `/run <flow> [user]` | run a flow, optionally as a stored user (name or PAN); result is posted back, failures include a screenshot |
+| `/run <flow> [user]` | run a flow, optionally as a stored user (name or PAN); the result is posted back with a screenshot of the final page (on success and on failure) |
 | `/stop` | cancel the running flow |
 | `/schedule <flow> <user\|-> <time>` | schedule a run (`HH:MM`, `YYYY-MM-DD HH:MM`, `+15m`, `+2h`) |
 | `/schedules`, `/unschedule <id>` | list / cancel scheduled runs |
@@ -135,7 +135,7 @@ pageContains("#kc-login") AND NOT pageContains(".dashboard")
 waitFor("#otp-field", 20) OR true
 ```
 
-Arguments and expressions may reference `@placeholders`; defaults are defined on the Start state as `@name=value` lines (quote values with spaces). Playback inserts a random 2–4 s pause between commands. Run logs are kept per flow (`runs to keep`) and the last result is shown in `/status` and the Status tab.
+Arguments and expressions may reference `@placeholders`; defaults are defined on the Start state as `@name=value` lines (quote values with spaces). Playback inserts a random 2–4 s pause between commands. Every run ends with a screenshot of the page (both Success and Terminal; cancelled runs skip it) saved next to the run log and delivered to Telegram as the result message. Run logs and screenshots are kept per flow (`runs to keep`) and the last result is shown in `/status` and the Status tab.
 
 ## Bridge and CLI
 
@@ -163,7 +163,7 @@ Behavioural notes: native `<select>` elements are chosen programmatically (value
 
 - Bank passwords and the bot token are in the Keychain; `.data/` contains no secrets except the local bridge session token.
 - The bridge is loopback-only; other processes running as your user can still reach it (that is the same trust boundary as your Keychain and `.data`).
-- Flow transcripts redact fill values and password-like placeholders.
+- Flow transcripts redact fill values and password-like placeholders. End-of-run screenshots can show whatever the bank page displays (account numbers, balances); they live in `.data/` (0600) and are posted to your Telegram chat.
 
 ## Troubleshooting
 

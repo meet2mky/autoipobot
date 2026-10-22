@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -55,9 +54,8 @@ func showRunLog(run flow.RunInfo, flowID string, pane *textPane, screenshot *wid
 	} else {
 		pane.setText(string(data), false)
 	}
-	png := filepath.Join(flow.RunsDir(flowID), run.RunID+".png")
-	if _, err := os.Stat(png); err == nil {
-		screenshot.SetText("Screenshot: " + png)
+	if shot := flow.RunScreenshot(flowID, run.RunID); shot != "" {
+		screenshot.SetText("Screenshot: " + shot)
 	} else {
 		screenshot.SetText("")
 	}

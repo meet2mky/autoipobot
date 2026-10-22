@@ -156,8 +156,11 @@ func runSummary(result flow.RunResult) string {
 		state = "CANCELLED"
 	}
 	text := fmt.Sprintf("%s in %s (%d steps) · log: %s", state, format.Duration(result.FinishedAt.Sub(result.StartedAt)), result.Steps, result.LogPath)
-	if result.ScreenshotPath != "" {
+	switch {
+	case result.ScreenshotPath != "":
 		text += " · screenshot: " + result.ScreenshotPath
+	case result.ScreenshotErr != "":
+		text += " · no screenshot: " + result.ScreenshotErr
 	}
 	return text
 }

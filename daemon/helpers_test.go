@@ -58,15 +58,17 @@ func (b *logBuffer) String() string {
 // recorder captures outbound traffic. It satisfies both outbox (used by the
 // bot and scheduler) and transport (used by the sender).
 type recorder struct {
-	mu    sync.Mutex
-	texts []string
-	docs  []recordedDoc
+	mu       sync.Mutex
+	texts    []string
+	docs     []recordedDoc
+	photoErr error
 }
 
 type recordedDoc struct {
 	name    string
 	content []byte
 	caption string
+	photo   bool // delivered via photo() / SendPhoto
 }
 
 func (r *recorder) text(text string) {
@@ -81,6 +83,14 @@ func (r *recorder) document(name string, content []byte, caption string) {
 	r.docs = append(r.docs, recordedDoc{name: name, content: append([]byte(nil), content...), caption: caption})
 }
 
+// photo records an inline image; photoErr (when set) makes SendPhoto fail
+// so tests can exercise the document fallback.
+func (r *recorder) photo(name string, content []byte, caption string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.docs = append(r.docs, recordedDoc{name: name, content: append([]byte(nil), content...), caption: caption, photo: true})
+}
+
 func (r *recorder) SendMessage(_ context.Context, _ int64, text string) error {
 	r.text(text)
 	return nil
@@ -88,6 +98,17 @@ func (r *recorder) SendMessage(_ context.Context, _ int64, text string) error {
 
 func (r *recorder) SendDocument(_ context.Context, _ int64, name string, content []byte, caption string) error {
 	r.document(name, content, caption)
+	return nil
+}
+
+func (r *recorder) SendPhoto(_ context.Context, _ int64, name string, content []byte, caption string) error {
+	r.mu.Lock()
+	photoErr := r.photoErr
+	r.mu.Unlock()
+	if photoErr != nil {
+		return photoErr
+	}
+	r.photo(name, content, caption)
 	return nil
 }
 
@@ -204,7 +225,7 @@ func newTestEnv(t *testing.T, exec flow.Executor, bridgeClient *bridge.Client) *
 		log:       log,
 		out:       out,
 		stats:     st,
-		runner:    newRunner(log, func() flow.Executor { return exec }, flow.Options{MaxVisits: 50, ScreenshotOnFailure: true}),
+		runner:    newRunner(log, func() flow.Executor { return exec }, flow.Options{MaxVisits: 50, Screenshots: flow.ScreenshotAlways}),
 		flows:     flow.OpenStore(paths.FlowsFile()),
 		schedules: schedule.Open(paths.SchedulesFile()),
 		secrets:   secrets.NewFileStore(paths.SecretsFile()),

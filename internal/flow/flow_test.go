@@ -22,6 +22,7 @@ type fakeExec struct {
 	failOn    string
 	served    int
 	shot      []byte
+	shotErr   error
 	probeHits int
 }
 
@@ -55,10 +56,10 @@ func (f *fakeExec) Command(ctx context.Context, name string, args []string) (str
 
 func (f *fakeExec) EnsureServing(context.Context) error { f.served++; return nil }
 func (f *fakeExec) Screenshot(context.Context) ([]byte, error) {
-	return f.shot, nil
+	return f.shot, f.shotErr
 }
 
-func quiet() Options { return Options{MaxVisits: 50} }
+func quiet() Options { return Options{MaxVisits: 50, Screenshots: ScreenshotNever} }
 
 func linearFlow() Flow {
 	f := New("login")
@@ -99,7 +100,7 @@ func TestExecuteFallbackAndFailureScreenshot(t *testing.T) {
 	f := linearFlow()
 	exec := &fakeExec{contains: map[string][]bool{"#dashboard": {false}}, shot: []byte("png")}
 	opts := quiet()
-	opts.ScreenshotOnFailure = true
+	opts.Screenshots = ScreenshotAlways
 	outcome := Execute(context.Background(), f, nil, exec, opts, nil)
 	if outcome.Success || !strings.Contains(outcome.Reason, "reached Terminal") {
 		t.Fatalf("outcome = %+v", outcome)
@@ -435,5 +436,82 @@ func TestRunWritesLogsLastRunAndHonoursLock(t *testing.T) {
 	}
 	if ListRuns(f.ID) != nil {
 		t.Fatal("DeleteRuns should remove logs")
+	}
+}
+
+func TestScreenshotModes(t *testing.T) {
+	f := New("shot")
+	f.StartNode().NextID = "go"
+	f.Nodes = append(f.Nodes, Node{ID: "go", Type: TypeCommand, Command: "open", NextID: f.SuccessID})
+	ok := func() *fakeExec { return &fakeExec{shot: []byte("\x89PNG\r\n\x1a\nimg")} }
+
+	always := quiet()
+	always.Screenshots = ScreenshotAlways
+	if outcome := Execute(context.Background(), f, nil, ok(), always, nil); !outcome.Success || len(outcome.Screenshot) == 0 {
+		t.Fatalf("ScreenshotAlways should capture on success: %+v", outcome)
+	}
+	onFailure := quiet()
+	onFailure.Screenshots = ScreenshotOnFailure
+	if outcome := Execute(context.Background(), f, nil, ok(), onFailure, nil); !outcome.Success || len(outcome.Screenshot) != 0 {
+		t.Fatalf("ScreenshotOnFailure must not capture on success: %+v", outcome)
+	}
+	failing := f.Clone()
+	failing.Nodes[failing.NodeIndex("go")].NextID = failing.TerminalID
+	if outcome := Execute(context.Background(), failing, nil, ok(), onFailure, nil); outcome.Success || len(outcome.Screenshot) == 0 {
+		t.Fatalf("ScreenshotOnFailure should capture at Terminal: %+v", outcome)
+	}
+	if DefaultOptions().Screenshots != ScreenshotAlways {
+		t.Fatal("default must capture on every outcome")
+	}
+
+	// Capture errors are reported, never fatal.
+	broken := &fakeExec{shotErr: errors.New("extension disconnected")}
+	outcome := Execute(context.Background(), f, nil, broken, always, nil)
+	if !outcome.Success || outcome.ScreenshotErr != "extension disconnected" || len(outcome.Screenshot) != 0 {
+		t.Fatalf("capture error handling = %+v", outcome)
+	}
+	// Cancelled runs never capture.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if outcome := Execute(ctx, f, nil, ok(), always, nil); len(outcome.Screenshot) != 0 || !outcome.Cancelled {
+		t.Fatalf("cancelled run captured a screenshot: %+v", outcome)
+	}
+}
+
+func TestRunSavesScreenshotWithSniffedExtensionAndPrunesIt(t *testing.T) {
+	t.Setenv(paths.EnvRoot, t.TempDir())
+	paths.ResetForTesting()
+	t.Cleanup(paths.ResetForTesting)
+
+	f := New("jpeg")
+	f.RunsToKeep = 1
+	f.StartNode().NextID = "go"
+	f.Nodes = append(f.Nodes, Node{ID: "go", Type: TypeCommand, Command: "open", NextID: f.SuccessID})
+	exec := &fakeExec{shot: []byte{0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3}}
+	opts := quiet()
+	opts.Screenshots = ScreenshotAlways
+	first, err := Run(context.Background(), RunRequest{Flow: f}, exec, opts)
+	if err != nil || !first.Success {
+		t.Fatalf("Run = %+v, %v", first, err)
+	}
+	if !strings.HasSuffix(first.ScreenshotPath, ".jpg") {
+		t.Fatalf("JPEG bytes should be saved as .jpg, got %q", first.ScreenshotPath)
+	}
+	if RunScreenshot(f.ID, first.RunID) != first.ScreenshotPath {
+		t.Fatal("RunScreenshot should find the saved image")
+	}
+	last, _ := ReadLastRun()
+	if last.Screenshot != first.ScreenshotPath || !last.Success {
+		t.Fatalf("LastRun = %+v", last)
+	}
+	second, err := Run(context.Background(), RunRequest{Flow: f}, exec, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(first.ScreenshotPath); !os.IsNotExist(err) {
+		t.Fatal("pruning the first run must also remove its screenshot")
+	}
+	if _, err := os.Stat(second.ScreenshotPath); err != nil {
+		t.Fatalf("second screenshot missing: %v", err)
 	}
 }

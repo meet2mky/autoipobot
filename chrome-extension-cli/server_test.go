@@ -723,8 +723,14 @@ func TestWebSocketRejectsInvalidFrames(t *testing.T) {
 		{"unmasked", func(c *wsClient) error {
 			return c.writeFrame(opcodeText, []byte(`{"type":"heartbeat_ack"}`), true, false)
 		}, closeProtocolError},
-		{"fragmented", func(c *wsClient) error { return c.writeFrame(opcodeText, []byte("part"), false, true) }, closeProtocolError},
-		{"continuation", func(c *wsClient) error { return c.writeFrame(opcodeContinuation, []byte("part"), true, true) }, closeProtocolError},
+		{"stray continuation", func(c *wsClient) error { return c.writeFrame(opcodeContinuation, []byte("part"), true, true) }, closeProtocolError},
+		{"data frame inside fragmented message", func(c *wsClient) error {
+			if err := c.writeFrame(opcodeText, []byte("part"), false, true); err != nil {
+				return err
+			}
+			return c.writeFrame(opcodeText, []byte(`{"type":"heartbeat_ack"}`), true, true)
+		}, closeProtocolError},
+		{"fragmented control frame", func(c *wsClient) error { return c.writeFrame(opcodePing, []byte("p"), false, true) }, closeProtocolError},
 		{"reserved opcode", func(c *wsClient) error { return c.writeFrame(0x3, nil, true, true) }, closeProtocolError},
 		{"oversized", func(c *wsClient) error {
 			header := []byte{0x80 | opcodeText, 0x80 | 127}
@@ -746,6 +752,56 @@ func TestWebSocketRejectsInvalidFrames(t *testing.T) {
 		}
 		_ = client.conn.Close()
 		waitFor(t, 2*time.Second, func() bool { return !tb.status(t).ExtensionConnected }, tc.name+": extension still reported as connected")
+	}
+}
+
+// Chrome splits WebSocket messages larger than ~128 KiB into continuation
+// frames, which is what every screenshot ack looks like. The bridge must
+// reassemble them (with control frames interleaved) instead of closing the
+// connection.
+func TestFragmentedScreenshotAckIsReassembled(t *testing.T) {
+	tb := startBridge(t, nil)
+	ws := mustDialWS(t, tb)
+	outcome := tb.postCommand(bridge.Request{Type: bridge.TypeScreenshot})
+	command := ws.readCommand(t)
+
+	raw := bytes.Repeat([]byte{0x89, 'P', 'N', 'G', 0, 1, 2, 3}, 300_000) // ~2.4 MB, like a Retina PNG
+	encoded := base64.StdEncoding.EncodeToString(raw)
+	payload, err := json.Marshal(map[string]any{"type": "ack", "id": command.ID, "ok": true, "screenshot": encoded, "tab_id": 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const chunk = 128 << 10
+	for offset := 0; offset < len(payload); offset += chunk {
+		end := offset + chunk
+		if end > len(payload) {
+			end = len(payload)
+		}
+		opcode := byte(opcodeContinuation)
+		if offset == 0 {
+			opcode = opcodeText
+		}
+		if err := ws.writeFrame(opcode, payload[offset:end], end == len(payload), true); err != nil {
+			t.Fatalf("write fragment at %d: %v", offset, err)
+		}
+		if offset == chunk {
+			// A ping in the middle of the message must be answered, not rejected.
+			ws.send(t, opcodePing, []byte("mid"))
+		}
+	}
+	got := awaitOutcome(t, outcome)
+	if got.status != http.StatusOK || !got.result.OK || got.result.TabID != 7 {
+		t.Fatalf("fragmented ack outcome = %d %+v", got.status, got.result)
+	}
+	decoded, err := bridge.DecodeScreenshot(got.result)
+	if err != nil || !bytes.Equal(decoded, raw) {
+		t.Fatalf("screenshot bytes mismatch (err=%v, %d bytes)", err, len(decoded))
+	}
+	if opcode, _, err := ws.readFrame(2 * time.Second); err != nil || opcode != opcodePong {
+		t.Fatalf("interleaved ping was not answered: opcode=%d err=%v", opcode, err)
+	}
+	if !tb.status(t).ExtensionConnected {
+		t.Fatal("extension must stay connected after a fragmented message")
 	}
 }
 

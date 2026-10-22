@@ -165,6 +165,31 @@ func (f *flakyTransport) SendMessage(ctx context.Context, chatID int64, text str
 	return f.recorder.SendMessage(ctx, chatID, text)
 }
 
+func TestSenderPhotoFallsBackToDocumentOnAPIError(t *testing.T) {
+	logs := &logBuffer{}
+	rec := &recorder{photoErr: &telegram.APIError{Code: 400, Description: "PHOTO_INVALID_DIMENSIONS"}}
+	s := newSender(rec, testChatID, newLogger(nil, logs))
+	s.start()
+	s.photo("shot.jpg", []byte("jpeg"), "run finished")
+	s.close(5 * time.Second)
+	docs := rec.allDocs()
+	if len(docs) != 1 || docs[0].photo || docs[0].name != "shot.jpg" || docs[0].caption != "run finished" {
+		t.Fatalf("expected a document fallback, got %+v", docs)
+	}
+	if !strings.Contains(logs.String(), "rejected photo") {
+		t.Fatalf("fallback should be logged:\n%s", logs.String())
+	}
+
+	ok := &recorder{}
+	s = newSender(ok, testChatID, newLogger(nil, &logBuffer{}))
+	s.start()
+	s.photo("shot.jpg", []byte("jpeg"), "caption")
+	s.close(5 * time.Second)
+	if docs := ok.allDocs(); len(docs) != 1 || !docs[0].photo {
+		t.Fatalf("expected an inline photo, got %+v", docs)
+	}
+}
+
 func TestSenderRetriesTransportErrorsOnce(t *testing.T) {
 	logs := &logBuffer{}
 	flaky := &flakyTransport{}

@@ -262,14 +262,15 @@ func (p *commandsPanel) takeScreenshot(button *widget.Button) {
 	}, func() { p.screenshotLabel.SetText("Last screenshot: " + saved) })
 }
 
-// saveScreenshot writes a PNG under .data/screenshots and returns its path.
-func saveScreenshot(png []byte) (string, error) {
+// saveScreenshot writes the image under .data/screenshots (extension chosen
+// from the bytes) and returns its path.
+func saveScreenshot(image []byte) (string, error) {
 	dir := paths.Data("screenshots")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("create screenshot directory: %w", err)
 	}
-	path := filepath.Join(dir, time.Now().Format("20060102-150405")+".png")
-	if err := os.WriteFile(path, png, 0o600); err != nil {
+	path := filepath.Join(dir, time.Now().Format("20060102-150405")+bridge.ImageExtension(image))
+	if err := os.WriteFile(path, image, 0o600); err != nil {
 		return "", fmt.Errorf("write screenshot: %w", err)
 	}
 	return path, nil

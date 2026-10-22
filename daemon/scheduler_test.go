@@ -105,7 +105,7 @@ func TestSchedulerFailureReportsScreenshot(t *testing.T) {
 	if entries[0].ID != entry.ID || entries[0].Status != schedule.StatusFailed || entries[0].Result != "open failed: element not found" {
 		t.Fatalf("entry = %+v", entries[0])
 	}
-	if docs := env.out.allDocs(); len(docs) != 1 || docs[0].caption != "open failed: element not found" {
+	if docs := env.out.allDocs(); len(docs) != 1 || !docs[0].photo || !strings.Contains(docs[0].caption, "open failed: element not found") {
 		t.Fatalf("docs = %+v", docs)
 	}
 }

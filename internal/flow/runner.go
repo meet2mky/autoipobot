@@ -72,7 +72,10 @@ func Run(ctx context.Context, req RunRequest, exec Executor, opts Options) (RunR
 	result.Outcome = Execute(ctx, req.Flow, values, exec, opts, runLog.Log)
 	result.FinishedAt = time.Now()
 	if len(result.Screenshot) > 0 {
-		if path, err := SaveScreenshot(req.Flow.ID, runLog.RunID, result.Screenshot); err == nil {
+		path, err := SaveScreenshot(req.Flow.ID, runLog.RunID, result.Screenshot)
+		if err != nil {
+			runLog.Log("[warning] could not save screenshot: " + err.Error())
+		} else {
 			result.ScreenshotPath = path
 			runLog.Log("[Run] screenshot saved to " + path)
 		}

@@ -20,14 +20,16 @@ const (
 type transport interface {
 	SendMessage(ctx context.Context, chatID int64, text string) error
 	SendDocument(ctx context.Context, chatID int64, filename string, content []byte, caption string) error
+	SendPhoto(ctx context.Context, chatID int64, filename string, content []byte, caption string) error
 }
 
-// outbound is one queued message or document.
+// outbound is one queued message, photo or document.
 type outbound struct {
 	text     string
 	filename string
 	content  []byte
 	caption  string
+	photo    bool // deliver inline with sendPhoto, falling back to a document
 }
 
 func (o outbound) kind() string {
@@ -88,6 +90,12 @@ func (s *sender) document(filename string, content []byte, caption string) {
 	s.enqueue(outbound{filename: filename, content: content, caption: caption})
 }
 
+// photo queues an image shown inline in the chat; if Telegram rejects it as
+// a photo (size/dimension limits) it is re-sent as a document.
+func (s *sender) photo(filename string, content []byte, caption string) {
+	s.enqueue(outbound{filename: filename, content: content, caption: caption, photo: true})
+}
+
 func (s *sender) enqueue(item outbound) {
 	select {
 	case <-s.stop:
@@ -146,10 +154,20 @@ func (s *sender) deliver(item outbound) {
 }
 
 func (s *sender) send(ctx context.Context, item outbound) error {
-	if item.filename != "" {
+	switch {
+	case item.filename != "" && item.photo:
+		err := s.transport.SendPhoto(ctx, s.chatID, item.filename, item.content, item.caption)
+		var apiErr *telegram.APIError
+		if errors.As(err, &apiErr) {
+			s.log.Printf("telegram rejected photo %s (%v); sending as document", item.filename, err)
+			return s.transport.SendDocument(ctx, s.chatID, item.filename, item.content, item.caption)
+		}
+		return err
+	case item.filename != "":
 		return s.transport.SendDocument(ctx, s.chatID, item.filename, item.content, item.caption)
+	default:
+		return s.transport.SendMessage(ctx, s.chatID, item.text)
 	}
-	return s.transport.SendMessage(ctx, s.chatID, item.text)
 }
 
 // close stops accepting messages, lets the goroutine drain the queue for up

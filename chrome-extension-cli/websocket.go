@@ -62,10 +62,11 @@ type webSocketOptions struct {
 	writeTimeout time.Duration // per-frame write deadline; 0 disables
 }
 
-// webSocketConn is a minimal server-side RFC 6455 connection: unfragmented
-// text and binary messages, ping/pong and the closing handshake. Writes are
-// serialized by a mutex so several goroutines may send frames concurrently;
-// reads must come from a single goroutine.
+// webSocketConn is a minimal server-side RFC 6455 connection: text and
+// binary messages (fragmented or not — Chrome splits anything above ~128 KiB,
+// such as screenshot acks, into continuation frames), ping/pong and the
+// closing handshake. Writes are serialized by a mutex so several goroutines
+// may send frames concurrently; reads must come from a single goroutine.
 type webSocketConn struct {
 	conn   net.Conn
 	reader *bufio.Reader
@@ -78,6 +79,7 @@ type webSocketConn struct {
 
 type frame struct {
 	opcode  byte
+	fin     bool
 	payload []byte
 }
 
@@ -141,11 +143,15 @@ func upgradeWebSocket(w http.ResponseWriter, r *http.Request, opts webSocketOpti
 	return ws, nil
 }
 
-// readMessage returns the payload of the next text or binary message. Control
-// frames are handled internally: pings are answered, pongs only refresh the
-// read deadline, and a close frame is echoed before a *closeError is returned.
-// Protocol violations close the connection and return an error.
+// readMessage returns the payload of the next text or binary message,
+// reassembling fragmented messages (an initial text/binary frame followed by
+// continuation frames, the last one carrying FIN). Control frames may be
+// interleaved and are handled internally: pings are answered, pongs only
+// refresh the read deadline, and a close frame is echoed before a *closeError
+// is returned. Protocol violations close the connection and return an error.
 func (ws *webSocketConn) readMessage() ([]byte, error) {
+	var message []byte
+	inProgress := false
 	for {
 		f, err := ws.readFrame()
 		if err != nil {
@@ -153,7 +159,25 @@ func (ws *webSocketConn) readMessage() ([]byte, error) {
 		}
 		switch f.opcode {
 		case opcodeText, opcodeBinary:
-			return f.payload, nil
+			if inProgress {
+				return nil, ws.fail(closeProtocolError, "new data frame received before the previous message completed")
+			}
+			if f.fin {
+				return f.payload, nil
+			}
+			inProgress = true
+			message = append(message[:0], f.payload...)
+		case opcodeContinuation:
+			if !inProgress {
+				return nil, ws.fail(closeProtocolError, "continuation frame without a message in progress")
+			}
+			if int64(len(message))+int64(len(f.payload)) > ws.opts.readLimit {
+				return nil, ws.fail(closeMessageTooBig, fmt.Sprintf("fragmented message exceeds the %d byte limit", ws.opts.readLimit))
+			}
+			message = append(message, f.payload...)
+			if f.fin {
+				return message, nil
+			}
 		case opcodePing:
 			if err := ws.writeFrame(opcodePong, f.payload); err != nil {
 				return nil, fmt.Errorf("answer ping: %w", err)
@@ -206,9 +230,9 @@ func (ws *webSocketConn) readFrame() (frame, error) {
 		return frame{}, ws.fail(closeProtocolError, "reserved bits set without a negotiated extension")
 	case !masked:
 		return frame{}, ws.fail(closeProtocolError, "client frame is not masked")
-	case opcode == opcodeContinuation || !fin:
-		return frame{}, ws.fail(closeProtocolError, "fragmented messages are not supported")
-	case opcode != opcodeText && opcode != opcodeBinary && opcode != opcodeClose && opcode != opcodePing && opcode != opcodePong:
+	case control && !fin:
+		return frame{}, ws.fail(closeProtocolError, "control frames must not be fragmented")
+	case opcode != opcodeContinuation && opcode != opcodeText && opcode != opcodeBinary && opcode != opcodeClose && opcode != opcodePing && opcode != opcodePong:
 		return frame{}, ws.fail(closeProtocolError, fmt.Sprintf("reserved opcode %#x", opcode))
 	case control && length > maxControlPayload:
 		return frame{}, ws.fail(closeProtocolError, "control frame payload exceeds 125 bytes")
@@ -226,7 +250,7 @@ func (ws *webSocketConn) readFrame() (frame, error) {
 	for i := range payload {
 		payload[i] ^= mask[i&3]
 	}
-	return frame{opcode: opcode, payload: payload}, nil
+	return frame{opcode: opcode, fin: fin, payload: payload}, nil
 }
 
 // writeText sends payload as a single unfragmented text message.

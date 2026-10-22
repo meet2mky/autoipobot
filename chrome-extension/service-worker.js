@@ -871,9 +871,11 @@ async function captureScreenshot(tab) {
     await chrome.tabs.update(tab.id, { active: true });
     await sleep(POLL_INTERVAL_MS);
   }
-  const result = await sendDebuggerCommand("Page.captureScreenshot", { format: "png" });
+  // JPEG keeps a Retina capture at a few hundred KB (PNG would be several
+  // MB); the bridge reassembles the fragmented WebSocket frames either way.
+  const result = await sendDebuggerCommand("Page.captureScreenshot", { format: "jpeg", quality: 85 });
   if (typeof result?.data !== "string" || !result.data) throw new Error("The page did not return a screenshot.");
-  await recordEvent(`Captured a screenshot of tab ${tab.id}`);
+  await recordEvent(`Captured a screenshot of tab ${tab.id} (${Math.round(result.data.length * 0.75 / 1024)} KB)`);
   return { tabId: tab.id, screenshot: result.data };
 }
 

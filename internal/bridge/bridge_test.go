@@ -177,3 +177,19 @@ func TestValidateURL(t *testing.T) {
 		}
 	}
 }
+
+func TestImageExtension(t *testing.T) {
+	cases := map[string][]byte{
+		".png":  []byte("\x89PNG\r\n\x1a\n...."),
+		".jpg":  {0xFF, 0xD8, 0xFF, 0xDB, 0},
+		".webp": []byte("RIFF\x00\x00\x00\x00WEBPVP8 "),
+	}
+	for want, data := range cases {
+		if got := ImageExtension(data); got != want {
+			t.Errorf("ImageExtension(%q) = %q, want %q", data[:4], got, want)
+		}
+	}
+	if got := ImageExtension([]byte("nonsense")); got != ".png" {
+		t.Errorf("unknown data should default to .png, got %q", got)
+	}
+}

@@ -29,7 +29,7 @@ const (
 	websocketWriteTimeout    = 10 * time.Second
 	shutdownTimeout          = 5 * time.Second
 	maxCommandBody           = 64 << 10
-	maxExtensionMessage      = 16 << 20
+	maxExtensionMessage      = 64 << 20
 )
 
 // envExtensionID restricts WebSocket connections to one extension ID when set.

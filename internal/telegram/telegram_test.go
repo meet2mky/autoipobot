@@ -67,9 +67,16 @@ func TestClientCalls(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&payload)
 			sent = append(sent, payload)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
-		case "sendDocument":
+		case "sendDocument", "sendPhoto":
 			if !strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-				t.Errorf("sendDocument content type = %s", r.Header.Get("Content-Type"))
+				t.Errorf("%s content type = %s", r.URL.Path, r.Header.Get("Content-Type"))
+			}
+			if err := r.ParseMultipartForm(1 << 20); err != nil {
+				t.Errorf("%s multipart: %v", r.URL.Path, err)
+			}
+			field := map[string]string{"sendDocument": "document", "sendPhoto": "photo"}[strings.TrimPrefix(r.URL.Path, "/bottok/")]
+			if _, _, err := r.FormFile(field); err != nil {
+				t.Errorf("%s missing %q part: %v", r.URL.Path, field, err)
 			}
 			_, _ = w.Write([]byte(`{"ok":true,"result":{}}`))
 		default:
@@ -93,6 +100,9 @@ func TestClientCalls(t *testing.T) {
 	}
 	if err := client.SendDocument(ctx, 42, "shot.png", []byte{1, 2, 3}, "cap"); err != nil {
 		t.Fatalf("SendDocument: %v", err)
+	}
+	if err := client.SendPhoto(ctx, 42, "shot.jpg", []byte{1, 2, 3}, "cap"); err != nil {
+		t.Fatalf("SendPhoto: %v", err)
 	}
 	err = client.call(ctx, "unknown", nil, "", nil)
 	var apiErr *APIError

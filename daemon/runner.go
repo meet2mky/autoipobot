@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"autoipo/internal/bridge"
 	"autoipo/internal/flow"
 )
 
@@ -166,9 +167,9 @@ func runOutcome(result flow.RunResult, err error) (bool, string) {
 	}
 }
 
-// reportRun sends the outcome of a run to the chat: the summary line and,
-// for failures that captured the page, the screenshot with the reason as
-// its caption.
+// reportRun sends the outcome of a run to the chat: the summary line and the
+// end-of-run screenshot (taken on both Success and Terminal) with the summary
+// as its caption; when no screenshot could be taken, the reason is reported.
 func reportRun(out outbox, req flow.RunRequest, result flow.RunResult, err error) {
 	switch {
 	case errors.Is(err, errRunBusy), errors.Is(err, flow.ErrAnotherRunActive):
@@ -178,12 +179,20 @@ func reportRun(out outbox, req flow.RunRequest, result flow.RunResult, err error
 		out.text(fmt.Sprintf("%s could not run: %v", describeRun(req), err))
 		return
 	}
-	out.text(runSummary(req, result))
-	if !result.Success && !result.Cancelled && len(result.Screenshot) > 0 {
-		name := "screenshot.png"
+	summary := runSummary(req, result)
+	switch {
+	case len(result.Screenshot) > 0:
+		name := "screenshot" + bridge.ImageExtension(result.Screenshot)
 		if result.ScreenshotPath != "" {
 			name = filepath.Base(result.ScreenshotPath)
 		}
-		out.document(name, result.Screenshot, result.Reason)
+		out.photo(name, result.Screenshot, summary)
+	case result.Cancelled:
+		out.text(summary)
+	default:
+		if result.ScreenshotErr != "" {
+			summary += "\n(no screenshot: " + result.ScreenshotErr + ")"
+		}
+		out.text(summary)
 	}
 }

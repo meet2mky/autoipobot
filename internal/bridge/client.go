@@ -192,7 +192,7 @@ func (c *Client) Send(ctx context.Context, request Request) (Result, error) {
 		return Result{}, err
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 16<<20))
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64<<20))
 	if err != nil {
 		return Result{}, fmt.Errorf("read bridge response: %w", err)
 	}

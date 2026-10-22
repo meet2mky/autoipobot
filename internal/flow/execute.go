@@ -21,10 +21,25 @@ type Executor interface {
 	Command(ctx context.Context, name string, args []string) (string, error)
 	// EnsureServing makes sure the bridge and extension are available.
 	EnsureServing(ctx context.Context) error
-	// Screenshot captures the target tab as PNG. Implementations may return
-	// (nil, nil) when unsupported.
+	// Screenshot captures the target tab as an image (PNG or JPEG bytes).
+	// Implementations may return (nil, nil) when unsupported.
 	Screenshot(ctx context.Context) ([]byte, error)
 }
+
+// ScreenshotMode selects when a run captures the page.
+type ScreenshotMode int
+
+const (
+	// ScreenshotAlways captures when the run reaches Success or Terminal.
+	ScreenshotAlways ScreenshotMode = iota
+	// ScreenshotOnFailure captures only when the run ends at Terminal.
+	ScreenshotOnFailure
+	// ScreenshotNever disables capture.
+	ScreenshotNever
+)
+
+// screenshotTimeout bounds the end-of-run capture.
+const screenshotTimeout = 20 * time.Second
 
 // Options tune execution.
 type Options struct {
@@ -34,26 +49,40 @@ type Options struct {
 	MaxDelay time.Duration
 	// MaxVisits caps the number of state visits (loop protection).
 	MaxVisits int
-	// ScreenshotOnFailure captures the page when a run ends at Terminal.
-	ScreenshotOnFailure bool
+	// Screenshots selects when the page is captured at the end of a run
+	// (default: on both Success and Terminal, never when cancelled).
+	Screenshots ScreenshotMode
 	// OnState is invoked when a state becomes current (for UI highlighting).
 	OnState func(nodeID string)
 }
 
-// DefaultOptions mirror the previous behaviour (2–4 s pauses).
+// DefaultOptions: 2–4 s human-like pauses and a screenshot on every outcome.
 func DefaultOptions() Options {
-	return Options{MinDelay: 2 * time.Second, MaxDelay: 4 * time.Second, MaxVisits: 1000, ScreenshotOnFailure: true}
+	return Options{MinDelay: 2 * time.Second, MaxDelay: 4 * time.Second, MaxVisits: 1000, Screenshots: ScreenshotAlways}
+}
+
+// wantsScreenshot reports whether the mode captures for the given outcome.
+func (m ScreenshotMode) wantsScreenshot(success bool) bool {
+	switch m {
+	case ScreenshotAlways:
+		return true
+	case ScreenshotOnFailure:
+		return !success
+	default:
+		return false
+	}
 }
 
 // Outcome summarises a finished run.
 type Outcome struct {
-	Success     bool
-	Cancelled   bool
-	FinalNodeID string
-	Steps       int
-	Reason      string            // why the run ended (empty on success)
-	Values      map[string]string // final placeholder values incl. SaveAs outputs
-	Screenshot  []byte            // PNG captured on failure, if any
+	Success       bool
+	Cancelled     bool
+	FinalNodeID   string
+	Steps         int
+	Reason        string            // why the run ended (empty on success)
+	Values        map[string]string // final placeholder values incl. SaveAs outputs
+	Screenshot    []byte            // page capture taken when the run ended (PNG/JPEG), if any
+	ScreenshotErr string            // why no screenshot could be taken, if capture was attempted
 }
 
 // ErrCancelled is reported when the run context ends.
@@ -77,14 +106,21 @@ func Execute(ctx context.Context, f Flow, values map[string]string, exec Executo
 		outcome.Success = success
 		outcome.Reason = reason
 		outcome.FinalNodeID = currentID
-		if !success && !outcome.Cancelled && opts.ScreenshotOnFailure && ctx.Err() == nil {
-			shotCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if !outcome.Cancelled && ctx.Err() == nil && opts.Screenshots.wantsScreenshot(success) {
+			// The run context may already be exhausted; capture on its own budget.
+			shotCtx, cancel := context.WithTimeout(context.Background(), screenshotTimeout)
 			defer cancel()
-			if png, err := exec.Screenshot(shotCtx); err == nil && len(png) > 0 {
-				outcome.Screenshot = png
-				log("[Flow] captured failure screenshot")
-			} else if err != nil {
+			image, err := exec.Screenshot(shotCtx)
+			switch {
+			case err != nil:
+				outcome.ScreenshotErr = err.Error()
 				log("[Flow] screenshot unavailable: " + err.Error())
+			case len(image) == 0:
+				outcome.ScreenshotErr = "extension returned an empty screenshot"
+				log("[Flow] screenshot unavailable: " + outcome.ScreenshotErr)
+			default:
+				outcome.Screenshot = image
+				log(fmt.Sprintf("[Flow] captured end-of-run screenshot (%d KB)", len(image)/1024))
 			}
 		}
 		return outcome
